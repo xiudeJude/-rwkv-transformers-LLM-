@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -9,16 +9,29 @@ from ..core.schemas import ModelMetadata, AttentionData, TokenCandidate, SingleS
 from ..hooks.base import HookManager
 from ..hooks.transformer import TransformerHookExtractor
 
-def resolve_model_path(model_id: str) -> str:
+def resolve_model_path_and_gguf(model_id: str) -> Tuple[str, Optional[str]]:
+    actual_path = model_id
+    gguf_file = None
+
     if os.path.exists(model_id):
-        return model_id
+        if os.path.isfile(model_id) and model_id.endswith(".gguf"):
+            gguf_file = os.path.basename(model_id)
+            actual_path = os.path.dirname(model_id)
+        elif os.path.isdir(model_id):
+            candidates = [f for f in os.listdir(model_id) if f.endswith(".gguf") and not f.startswith("mmproj")]
+            if candidates:
+                gguf_file = candidates[0]
+                actual_path = model_id
+        return actual_path, gguf_file
+
     try:
         from modelscope import snapshot_download
         print(f"[ModelLoader] Resolving '{model_id}' via ModelScope...")
-        return snapshot_download(model_id)
+        downloaded = snapshot_download(model_id)
+        return downloaded, None
     except Exception as e:
         print(f"[ModelLoader] ModelScope resolution failed: {e}. Using raw model_id.")
-        return model_id
+        return model_id, None
 
 class TransformerEngine(BaseInferenceEngine):
     """Engine implementation for Transformer-based causal models using PyTorch forward hooks."""
@@ -34,6 +47,7 @@ class TransformerEngine(BaseInferenceEngine):
         self.num_heads = 0
         self.hidden_size = 0
         self.vocab_size = 0
+        self.full_attn_layers: List[int] = []
 
     def load_model(self, model_name_or_path: str, device: Optional[str] = None):
         if device is None:
@@ -42,23 +56,27 @@ class TransformerEngine(BaseInferenceEngine):
             self.device = device
 
         self.model_id = model_name_or_path
-        actual_path = resolve_model_path(model_name_or_path)
+        actual_path, gguf_file = resolve_model_path_and_gguf(model_name_or_path)
 
         # Determine dtype
         dtype = torch.float16 if self.device == "cuda" else torch.float32
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            actual_path,
-            trust_remote_code=True
-        )
+        load_kwargs: Dict[str, Any] = {
+            "trust_remote_code": True,
+        }
+        if gguf_file:
+            load_kwargs["gguf_file"] = gguf_file
 
-        # Force eager attention implementation to expose attention weights
+        print(f"[TransformerEngine] Loading tokenizer from: {actual_path} (gguf: {gguf_file})...")
+        self.tokenizer = AutoTokenizer.from_pretrained(actual_path, **load_kwargs)
+
+        print(f"[TransformerEngine] Loading model into device {self.device}...")
         self.model = AutoModelForCausalLM.from_pretrained(
             actual_path,
             dtype=dtype,
             device_map=self.device,
             attn_implementation="eager",
-            trust_remote_code=True
+            **load_kwargs
         )
 
         self.model.config.output_attentions = True
@@ -71,8 +89,17 @@ class TransformerEngine(BaseInferenceEngine):
         self.hidden_size = getattr(config, "hidden_size", getattr(config, "n_embd", 0))
         self.vocab_size = getattr(config, "vocab_size", len(self.tokenizer))
 
-        # Register extraction hooks on all layers
+        # Check hybrid layer types (e.g. Qwen 3.5)
+        layer_types = getattr(config, "layer_types", None)
+        if layer_types:
+            self.full_attn_layers = [i for i, t in enumerate(layer_types) if t == "full_attention"]
+        else:
+            self.full_attn_layers = list(range(self.num_layers))
+
+        # Register extraction hooks
         self.hook_manager.remove_all()
+        self.hook_extractor.register_attention_hooks(self.model)
+        print(f"[TransformerEngine] Initialized: Layers={self.num_layers}, FullAttnLayers={self.full_attn_layers}, Heads={self.num_heads}")
         self.hook_extractor.register_attention_hooks(self.model)
 
     def get_metadata(self) -> ModelMetadata:
@@ -83,7 +110,8 @@ class TransformerEngine(BaseInferenceEngine):
             num_heads=self.num_heads,
             hidden_size=self.hidden_size,
             vocab_size=self.vocab_size,
-            device=str(self.device)
+            device=str(self.device),
+            full_attn_layers=self.full_attn_layers
         )
 
     def tokenize(self, text: str) -> Dict[str, Any]:
@@ -135,14 +163,23 @@ class TransformerEngine(BaseInferenceEngine):
         with torch.no_grad():
             outputs = self.model(input_ids, output_attentions=True)
 
+        # In hybrid models (like Qwen 3.5), only full_attention layers output softmax attention matrices
+        effective_layer = layer
+        if self.full_attn_layers and layer not in self.full_attn_layers:
+            effective_layer = min(self.full_attn_layers, key=lambda x: abs(x - layer))
+
         # Retrieve attention tensor from HookManager
-        attn_tensor = self.hook_extractor.get_attention_matrix(layer, head)
+        attn_tensor = self.hook_extractor.get_attention_matrix(effective_layer, head)
+        if attn_tensor is None and outputs.attentions is not None:
+            if self.full_attn_layers and effective_layer in self.full_attn_layers:
+                attn_idx = self.full_attn_layers.index(effective_layer)
+                if attn_idx < len(outputs.attentions):
+                    attn_tensor = outputs.attentions[attn_idx][0, head].detach().float().cpu()
+            elif effective_layer < len(outputs.attentions):
+                attn_tensor = outputs.attentions[effective_layer][0, head].detach().float().cpu()
+
         if attn_tensor is None:
-            # Fallback to output.attentions if hook intercepted differently
-            if outputs.attentions is not None and len(outputs.attentions) > layer:
-                attn_tensor = outputs.attentions[layer][0, head].detach().float().cpu()
-            else:
-                raise ValueError(f"Failed to capture attention matrix for layer {layer}, head {head}")
+            raise ValueError(f"Failed to capture attention matrix for layer {effective_layer}, head {head}")
 
         # [L, L] matrix converted to Python list of floats with reasonable precision
         matrix_list = [[round(val, 4) for val in row] for row in attn_tensor.tolist()]
@@ -169,7 +206,7 @@ class TransformerEngine(BaseInferenceEngine):
             prompt=prompt,
             model_meta=self.get_metadata(),
             attention=AttentionData(
-                layer=layer,
+                layer=effective_layer,
                 head=head,
                 matrix=matrix_list,
                 tokens=tokens,

@@ -275,6 +275,7 @@ export function App() {
               onTemperatureChange={setTemperature}
               topK={topK}
               onTopKChange={setTopK}
+              fullAttnLayers={modelMeta?.full_attn_layers}
               disabled={loading}
             />
 

@@ -14,6 +14,7 @@ class ModelMetadata(BaseModel):
     hidden_size: int
     vocab_size: int
     device: str
+    full_attn_layers: List[int] = Field(default_factory=list)
 
 class AttentionData(BaseModel):
     layer: int
@@ -24,8 +25,8 @@ class AttentionData(BaseModel):
 
 class SingleStepInspectRequest(BaseModel):
     prompt: str = Field(..., description="Prompt text to inspect")
-    model_name: Optional[str] = Field("Qwen/Qwen2.5-0.5B-Instruct", description="HuggingFace model ID or local path")
-    layer: int = Field(0, description="Target layer index to extract")
+    model_name: Optional[str] = Field(None, description="HuggingFace model ID or local path (defaults to configured model)")
+    layer: int = Field(3, description="Target layer index to extract")
     head: int = Field(0, description="Target attention head index to extract")
     top_k: int = Field(10, description="Number of next-token candidates to return")
     temperature: float = Field(0.7, ge=0.01, le=2.0)

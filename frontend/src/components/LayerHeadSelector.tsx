@@ -11,6 +11,7 @@ interface LayerHeadSelectorProps {
   onTemperatureChange: (temp: number) => void;
   topK: number;
   onTopKChange: (k: number) => void;
+  fullAttnLayers?: number[];
   disabled?: boolean;
 }
 
@@ -25,12 +26,25 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
   onTemperatureChange,
   topK,
   onTopKChange,
+  fullAttnLayers = [],
   disabled = false,
 }) => {
+  const isHybrid = fullAttnLayers.length > 0 && fullAttnLayers.length < numLayers;
+  const isFullAttn = !isHybrid || fullAttnLayers.includes(currentLayer);
+
   return (
     <div className="bg-slate-900/60 rounded-xl border border-slate-800/80 p-4 space-y-4 shadow-xl">
       <h3 className="text-sm font-semibold text-slate-200 border-b border-slate-800 pb-2 flex items-center justify-between">
         <span>观察维度与采样参数</span>
+        {isHybrid && (
+          <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-medium border ${
+            isFullAttn 
+              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' 
+              : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+          }`}>
+            {isFullAttn ? 'Full Attention (Softmax)' : 'Linear Attention (DeltaNet)'}
+          </span>
+        )}
       </h3>
 
       {/* Layer selector slider & buttons */}
@@ -50,6 +64,28 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
           disabled={disabled || numLayers <= 1}
           className="w-full accent-indigo-500 bg-slate-800 rounded-lg cursor-pointer h-1.5"
         />
+        
+        {/* If hybrid architecture, show quick buttons for Full Attention layers */}
+        {isHybrid && (
+          <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] text-slate-400">完整注意力层:</span>
+            {fullAttnLayers.map((l) => (
+              <button
+                key={l}
+                type="button"
+                onClick={() => onLayerChange(l)}
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                  currentLayer === l
+                    ? 'bg-emerald-500 text-white font-bold border-emerald-400 shadow-sm'
+                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                }`}
+              >
+                L{l}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-mono">
           <span>0 (底层词法)</span>
           <span>{Math.floor(numLayers / 2)} (中层句法)</span>

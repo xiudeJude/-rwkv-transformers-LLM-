@@ -9,8 +9,8 @@ class Settings:
     DEBUG: bool = True
     
     # Models
-    DEFAULT_TRANSFORMER: str = os.getenv("DEFAULT_TRANSFORMER", "Qwen/Qwen2.5-0.5B-Instruct")
-    DEFAULT_RWKV: str = os.getenv("DEFAULT_RWKV", "RWKV/v5-Eagle-0.4B-HF")
+    DEFAULT_TRANSFORMER: str = os.getenv("DEFAULT_TRANSFORMER", "D:/rwkv/models/unsloth/Qwen3.5-0.8B-GGUF")
+    DEFAULT_RWKV: str = os.getenv("DEFAULT_RWKV", "D:/rwkv/models/rwkv7-g1d-0.4b-20260210-ctx8192.pth")
     
     # HF Mirror fallback
     HF_ENDPOINT: str = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")

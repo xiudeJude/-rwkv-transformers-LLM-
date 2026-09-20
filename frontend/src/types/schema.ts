@@ -12,6 +12,7 @@ export interface ModelMetadata {
   hidden_size: number;
   vocab_size: number;
   device: string;
+  full_attn_layers?: number[];
 }
 
 export interface AttentionData {
