@@ -23,6 +23,11 @@ class AttentionData(BaseModel):
     tokens: List[str]          # token str strings for axis labels
     token_ids: List[int]
 
+class CreateSessionRequest(BaseModel):
+    prompt: str = Field(..., description="Initial prompt to prefill")
+    layer: int = Field(3, description="Target layer index to monitor")
+    head: int = Field(0, description="Target head index to monitor")
+
 class SingleStepInspectRequest(BaseModel):
     prompt: str = Field(..., description="Prompt text to inspect")
     model_name: Optional[str] = Field(None, description="HuggingFace model ID or local path (defaults to configured model)")

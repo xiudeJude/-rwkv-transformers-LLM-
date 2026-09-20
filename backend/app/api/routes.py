@@ -47,3 +47,31 @@ async def inspect_single_step(req: SingleStepInspectRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inspection failed: {str(e)}")
+
+from ..core.schemas import CreateSessionRequest
+from ..models.session import session_manager
+
+@router.post("/api/session/create")
+async def create_session(req: CreateSessionRequest):
+    try:
+        engine = get_engine()
+        session = session_manager.create_session(engine)
+        prefill_result = session.prefill(
+            prompt=req.prompt,
+            target_layer=req.layer,
+            target_head=req.head
+        )
+        return {
+            "status": "success",
+            "session_id": session.session_id,
+            "prefill_attention": prefill_result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prefill failed: {str(e)}")
+
+@router.post("/api/session/{session_id}/close")
+async def close_session(session_id: str):
+    success = session_manager.close_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "closed", "session_id": session_id}

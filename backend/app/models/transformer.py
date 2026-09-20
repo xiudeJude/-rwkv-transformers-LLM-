@@ -58,8 +58,8 @@ class TransformerEngine(BaseInferenceEngine):
         self.model_id = model_name_or_path
         actual_path, gguf_file = resolve_model_path_and_gguf(model_name_or_path)
 
-        # Determine dtype
-        dtype = torch.float16 if self.device == "cuda" else torch.float32
+        # Determine dtype - explicitly require bfloat16 on CUDA as specified
+        dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
 
         load_kwargs: Dict[str, Any] = {
             "trust_remote_code": True,
