@@ -28,6 +28,12 @@ class CreateSessionRequest(BaseModel):
     layer: int = Field(3, description="Target layer index to monitor")
     head: int = Field(0, description="Target head index to monitor")
 
+class StepRequest(BaseModel):
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
+    top_k: int = Field(10, ge=1, le=100)
+    layer: int = Field(3, description="Target layer index")
+    head: int = Field(0, description="Target head index")
+
 class SingleStepInspectRequest(BaseModel):
     prompt: str = Field(..., description="Prompt text to inspect")
     model_name: Optional[str] = Field(None, description="HuggingFace model ID or local path (defaults to configured model)")

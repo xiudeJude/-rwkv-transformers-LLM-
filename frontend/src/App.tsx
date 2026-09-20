@@ -266,7 +266,7 @@ export function App() {
           <div className="space-y-4">
             <LayerHeadSelector
               numLayers={modelMeta?.num_layers || 24}
-              numHeads={modelMeta?.num_heads || 14}
+              numHeads={modelMeta?.num_heads || 8}
               currentLayer={currentLayer}
               currentHead={currentHead}
               onLayerChange={handleLayerChange}

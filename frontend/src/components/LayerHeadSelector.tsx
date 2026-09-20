@@ -101,8 +101,8 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
             Head {currentHead} / {Math.max(0, numHeads - 1)}
           </span>
         </div>
-        <div className="grid grid-cols-7 gap-1">
-          {Array.from({ length: numHeads || 14 }).map((_, idx) => (
+        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
+          {Array.from({ length: numHeads || 8 }).map((_, idx) => (
             <button
               key={idx}
               type="button"

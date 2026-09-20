@@ -93,6 +93,111 @@ class InferenceSession:
             "past_key_values_type": type(self.past_key_values).__name__
         }
 
+    def step(
+        self,
+        temperature: float = 0.7,
+        top_k: int = 10,
+        target_layer: int = 3,
+        target_head: int = 0
+    ) -> Dict[str, Any]:
+        """Runs a single decode step using past_key_values and input_ids strictly shaped [1, 1]."""
+        if self.is_finished:
+            return {
+                "step": self.step_count,
+                "token": "",
+                "token_id": -1,
+                "token_prob": 0.0,
+                "topk_candidates": [],
+                "attention_slice": None,
+                "is_finished": True
+            }
+
+        if self.last_logits is None or self.past_key_values is None:
+            raise RuntimeError("Session has not executed prefill stage. Call prefill() first.")
+
+        # 1. Sample next token from last_logits [1, vocab_size]
+        logits = self.last_logits[0].float()
+        softmax_probs = torch.softmax(logits, dim=-1)
+
+        # Compute Top-K candidate probabilities for UI visualization
+        topk_probs, topk_indices = torch.topk(softmax_probs, k=min(top_k, len(logits)))
+        candidates = []
+        for p, idx in zip(topk_probs.tolist(), topk_indices.tolist()):
+            candidates.append({
+                "token": self.engine.decode_token(idx),
+                "prob": round(float(p), 4),
+                "id": int(idx)
+            })
+
+        # Token Sampling
+        if temperature <= 1e-4:
+            next_token_id = int(torch.argmax(logits).item())
+            sampled_prob = float(softmax_probs[next_token_id].item())
+        else:
+            scaled_logits = logits / max(temperature, 1e-4)
+            filtered_probs = torch.softmax(scaled_logits, dim=-1)
+            topk_vals, topk_idxs = torch.topk(filtered_probs, k=min(top_k, len(filtered_probs)))
+            topk_vals = topk_vals / topk_vals.sum()
+            sample_idx = torch.multinomial(topk_vals, num_samples=1).item()
+            next_token_id = int(topk_idxs[sample_idx].item())
+            sampled_prob = float(softmax_probs[next_token_id].item())
+
+        sampled_token = self.engine.decode_token(next_token_id)
+        self.tokens.append(sampled_token)
+        self.token_ids.append(next_token_id)
+        self.step_count += 1
+
+        # Check EOS token
+        eos_id = getattr(self.engine.tokenizer, "eos_token_id", None)
+        if next_token_id == eos_id or next_token_id in [248046, 248044]:
+            self.is_finished = True
+
+        # 2. Decode forward pass: input_ids strictly [1, 1]
+        step_input_ids = torch.tensor([[next_token_id]], device=self.engine.device, dtype=torch.long)
+
+        with torch.no_grad():
+            outputs = self.engine.model(
+                input_ids=step_input_ids,
+                past_key_values=self.past_key_values,
+                use_cache=True,
+                output_attentions=True
+            )
+
+        # 3. Update state in session
+        self.past_key_values = outputs.past_key_values
+        self.last_logits = outputs.logits[:, -1, :].detach()
+
+        # 4. Extract incremental attention slice: shape [B, H, 1, L_prompt + t]
+        full_layers = self.engine.full_attn_layers
+        if full_layers and target_layer in full_layers:
+            attn_layer_idx = full_layers.index(target_layer)
+        elif full_layers:
+            closest_layer = min(full_layers, key=lambda x: abs(x - target_layer))
+            attn_layer_idx = full_layers.index(closest_layer)
+            target_layer = closest_layer
+        else:
+            attn_layer_idx = min(target_layer, len(outputs.attentions) - 1)
+
+        # Target attention tensor: [1, L_prompt + t]
+        raw_slice = outputs.attentions[attn_layer_idx][0, target_head, 0, :].detach().float().cpu()
+        slice_weights = [round(val, 6) for val in raw_slice.tolist()]
+
+        return {
+            "step": self.step_count,
+            "token": sampled_token,
+            "token_id": next_token_id,
+            "token_prob": round(sampled_prob, 4),
+            "topk_candidates": candidates,
+            "attention_slice": {
+                "layer": target_layer,
+                "head": target_head,
+                "shape": list(outputs.attentions[attn_layer_idx].shape),
+                "weights": slice_weights,
+                "slice_len": len(slice_weights)
+            },
+            "is_finished": self.is_finished
+        }
+
     def close(self):
         """Explicitly release past_key_values and free GPU VRAM."""
         if self.past_key_values is not None:

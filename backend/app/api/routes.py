@@ -48,7 +48,7 @@ async def inspect_single_step(req: SingleStepInspectRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inspection failed: {str(e)}")
 
-from ..core.schemas import CreateSessionRequest
+from ..core.schemas import CreateSessionRequest, StepRequest
 from ..models.session import session_manager
 
 @router.post("/api/session/create")
@@ -68,6 +68,26 @@ async def create_session(req: CreateSessionRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prefill failed: {str(e)}")
+
+@router.post("/api/session/{session_id}/step")
+async def session_step(session_id: str, req: StepRequest):
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    try:
+        step_result = session.step(
+            temperature=req.temperature,
+            top_k=req.top_k,
+            target_layer=req.layer,
+            target_head=req.head
+        )
+        return {
+            "status": "success",
+            "session_id": session_id,
+            **step_result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Step failed: {str(e)}")
 
 @router.post("/api/session/{session_id}/close")
 async def close_session(session_id: str):
