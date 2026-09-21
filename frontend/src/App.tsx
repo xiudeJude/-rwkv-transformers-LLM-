@@ -92,6 +92,44 @@ export function App() {
   const allTokensRef = useRef<string[]>([]);
   const debounceTimerRef = useRef<number | null>(null);
 
+  // Synced refs for unmount and unload cleanup
+  const activeSessionIdRef = useRef<string | null>(null);
+  const modelArchRef = useRef<'transformer' | 'rwkv'>('transformer');
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    modelArchRef.current = modelArch;
+  }, [modelArch]);
+
+  // Helper to cleanly terminate and release an active session from GPU VRAM
+  const closeActiveSession = (sessId: string | null, arch: 'transformer' | 'rwkv') => {
+    if (wsRef.current) {
+      try {
+        if (wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ action: 'close' }));
+        }
+        wsRef.current.close();
+      } catch (e) {
+        console.warn('Error closing websocket:', e);
+      }
+      wsRef.current = null;
+    }
+    if (pipelineRef.current) {
+      pipelineRef.current.stop();
+    }
+    if (sessId) {
+      const endpoint = arch === 'transformer'
+        ? `/api/session/${sessId}/close`
+        : `/api/rwkv/session/${sessId}/close`;
+      fetch(`${API_BASE}${endpoint}`, { method: 'POST' }).catch((err) => {
+        console.warn(`[Cleanup] Failed to close session ${sessId}:`, err);
+      });
+    }
+  };
+
   // Quick preset prompts
   const presets = [
     '注意力机制让大语言模型能够精确捕捉长距离语义依赖关系',
@@ -116,13 +154,21 @@ export function App() {
         console.warn('Backend not ready yet:', err.message);
       });
 
+    const handleBeforeUnload = () => {
+      const sid = activeSessionIdRef.current;
+      const arch = modelArchRef.current;
+      if (sid) {
+        const endpoint = arch === 'transformer'
+          ? `/api/session/${sid}/close`
+          : `/api/rwkv/session/${sid}/close`;
+        navigator.sendBeacon?.(`${API_BASE}${endpoint}`);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (pipelineRef.current) {
-        pipelineRef.current.stop();
-      }
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      closeActiveSession(activeSessionIdRef.current, modelArchRef.current);
     };
   }, []);
 
@@ -175,9 +221,14 @@ export function App() {
 
   // Architecture switch handler
   const handleArchSwitch = (newArch: 'transformer' | 'rwkv') => {
-    if (isStreaming) return;
+    if (newArch === modelArch) return;
+
+    // Explicitly terminate active session and release GPU VRAM before switching paradigm
+    closeActiveSession(activeSessionId, modelArch);
+
     setModelArch(newArch);
     setActiveSessionId(null);
+    setIsStreaming(false);
     setGeneratedText('');
     setTokenList([]);
     setInspectedStep(null);
@@ -220,6 +271,13 @@ export function App() {
   // Handler: Start WebSocket Streaming Generation
   const handleStartStreaming = async () => {
     if (!prompt.trim() || isStreaming) return;
+
+    // If an existing session is still held in memory, explicitly close it before creating a new one
+    if (activeSessionId) {
+      closeActiveSession(activeSessionId, modelArch);
+      setActiveSessionId(null);
+    }
+
     setError(null);
     setGeneratedText('');
     setTokenList([]);
@@ -403,13 +461,8 @@ export function App() {
 
   // Handler: Stop Streaming
   const handleStopStreaming = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'close' }));
-      wsRef.current.close();
-    }
-    if (pipelineRef.current) {
-      pipelineRef.current.stop();
-    }
+    closeActiveSession(activeSessionId, modelArch);
+    setActiveSessionId(null);
     setIsStreaming(false);
     setStreamStatus('stopped');
   };
@@ -648,11 +701,10 @@ export function App() {
         <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
           <button
             onClick={() => handleArchSwitch('transformer')}
-            disabled={isStreaming}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
               modelArch === 'transformer'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed'
+                : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
@@ -660,11 +712,10 @@ export function App() {
           </button>
           <button
             onClick={() => handleArchSwitch('rwkv')}
-            disabled={isStreaming}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
               modelArch === 'rwkv'
                 ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/30'
-                : 'text-slate-400 hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed'
+                : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Activity className="w-3.5 h-3.5" />
