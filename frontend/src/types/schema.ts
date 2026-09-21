@@ -40,3 +40,28 @@ export interface SingleStepInspectResponse {
   next_token: TokenCandidate;
   top_k_candidates: TokenCandidate[];
 }
+
+export interface TokenStepPayload {
+  type: 'token_step' | 'error';
+  step: number;
+  token: string;
+  token_id: number;
+  token_prob: number;
+  topk_candidates: TokenCandidate[];
+  is_finished: boolean;
+  finish_reason?: string;
+  message?: string;
+}
+
+export interface SessionAttentionResponse {
+  status: string;
+  session_id: string;
+  step: number;
+  layer: number;
+  head: number;
+  tokens: string[];
+  seq_len: number;
+  attention_row: number[];
+  full_matrix: number[][];
+}
+
