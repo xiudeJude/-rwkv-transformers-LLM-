@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { getViridisColor, toLogScale } from '../../utils/colormaps';
 import { RefreshCw, ArrowDown, Eye, Layers } from 'lucide-react';
 
@@ -43,39 +43,28 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Local state keeping the accumulated matrix & tokens
+  // Local state keeping the accumulated matrix & tokens across streaming steps
   const localMatrixRef = useRef<number[][]>([]);
   const localTokensRef = useRef<string[]>([]);
+  const lastMatrixRef = useRef<number[][] | null>(null);
+
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [currentDim, setCurrentDim] = useState(0);
 
   // Layout constants
+  const CELL_SIZE = 22; // Fixed cell size: prevents scaling/alignment jitter between steps
   const LABEL_MARGIN_TOP = 85;
   const LABEL_MARGIN_LEFT = 85;
-  const COLORBAR_WIDTH = 20;
-  const COLORBAR_MARGIN = 20;
+  const COLORBAR_WIDTH = 18;
+  const COLORBAR_MARGIN = 24;
 
-  // Initialize offscreen canvas once
-  if (!offscreenCanvasRef.current) {
+  // Initialize offscreen buffer once
+  if (!offscreenCanvasRef.current && typeof document !== 'undefined') {
     offscreenCanvasRef.current = document.createElement('canvas');
   }
 
-  // Determine current matrix dimensions
-  const L = localMatrixRef.current.length || (matrix ? matrix.length : 0);
-
-  // Dynamic cell size
-  const cellSize = useMemo(() => {
-    if (L <= 20) return 26;
-    if (L <= 45) return 20;
-    return 16;
-  }, [L]);
-
-  const gridWidth = L * cellSize;
-  const gridHeight = L * cellSize;
-  const canvasWidth = LABEL_MARGIN_LEFT + gridWidth + COLORBAR_MARGIN + COLORBAR_WIDTH + 40;
-  const canvasHeight = LABEL_MARGIN_TOP + gridHeight + 30;
-
-  // Blit offscreen buffer to visible canvas and render axes/labels
+  // Blit offscreen buffer to visible canvas and render axes/labels/colorbar
   const renderVisibleCanvas = useCallback((currentTokens: string[], hover: HoverInfo | null) => {
     const visibleCanvas = visibleCanvasRef.current;
     const offscreen = offscreenCanvasRef.current;
@@ -84,16 +73,25 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     const ctx = visibleCanvas.getContext('2d');
     if (!ctx) return;
 
+    const totalL = currentTokens.length;
+    if (totalL === 0) return;
+
+    const gridWidth = totalL * CELL_SIZE;
+    const gridHeight = totalL * CELL_SIZE;
+    const canvasWidth = LABEL_MARGIN_LEFT + gridWidth + COLORBAR_MARGIN + COLORBAR_WIDTH + 60;
+    const canvasHeight = Math.max(LABEL_MARGIN_TOP + gridHeight + 40, 260);
+
     const dpr = window.devicePixelRatio || 1;
     visibleCanvas.width = canvasWidth * dpr;
     visibleCanvas.height = canvasHeight * dpr;
+    visibleCanvas.style.width = `${canvasWidth}px`;
+    visibleCanvas.style.height = `${canvasHeight}px`;
+
     ctx.scale(dpr, dpr);
 
     // Background
     ctx.fillStyle = '#0f172a'; // slate-900
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-    const totalL = currentTokens.length;
 
     // 1. Draw Axis Headings
     ctx.fillStyle = '#94a3b8'; // slate-400
@@ -101,7 +99,7 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     ctx.fillText('Key Tokens (Attended To) →', LABEL_MARGIN_LEFT, 20);
 
     ctx.save();
-    ctx.translate(20, LABEL_MARGIN_TOP + (totalL * cellSize) / 2);
+    ctx.translate(20, LABEL_MARGIN_TOP + (totalL * CELL_SIZE) / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
     ctx.fillText('← Query Tokens (Attending)', 0, 0);
@@ -113,7 +111,7 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     for (let j = 0; j < totalL; j++) {
       const rawTok = currentTokens[j] || '';
       const displayTok = rawTok.replace(/\n/g, '\\n').replace(/ /g, '␣');
-      const cx = LABEL_MARGIN_LEFT + j * cellSize + cellSize / 2;
+      const cx = LABEL_MARGIN_LEFT + j * CELL_SIZE + CELL_SIZE / 2;
       const cy = LABEL_MARGIN_TOP - 8;
 
       ctx.save();
@@ -132,44 +130,51 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
       const rawTok = currentTokens[i] || '';
       const displayTok = rawTok.replace(/\n/g, '\\n').replace(/ /g, '␣');
       const cx = LABEL_MARGIN_LEFT - 8;
-      const cy = LABEL_MARGIN_TOP + i * cellSize + cellSize / 2;
+      const cy = LABEL_MARGIN_TOP + i * CELL_SIZE + CELL_SIZE / 2;
 
       ctx.fillStyle = hover && hover.row === i ? '#38bdf8' : '#cbd5e1';
       ctx.font = hover && hover.row === i ? 'bold 11px ui-monospace, monospace' : '10px ui-monospace, monospace';
       ctx.fillText(displayTok, cx, cy);
     }
 
-    // 4. Blit the offscreen pixel buffer (Single drawImage call: < 0.2ms!)
+    // 4. Blit the offscreen pixel buffer (Single drawImage call: < 0.1ms!)
     if (offscreen.width > 0 && offscreen.height > 0) {
-      ctx.drawImage(offscreen, LABEL_MARGIN_LEFT, LABEL_MARGIN_TOP);
+      ctx.drawImage(
+        offscreen,
+        0,
+        0,
+        gridWidth,
+        gridHeight,
+        LABEL_MARGIN_LEFT,
+        LABEL_MARGIN_TOP,
+        gridWidth,
+        gridHeight
+      );
     }
 
     // 5. Draw Hover Highlight Box & Crosshair
     if (hover) {
-      const hx = LABEL_MARGIN_LEFT + hover.col * cellSize;
-      const hy = LABEL_MARGIN_TOP + hover.row * cellSize;
-      const curGridW = totalL * cellSize;
-      const curGridH = totalL * cellSize;
+      const hx = LABEL_MARGIN_LEFT + hover.col * CELL_SIZE;
+      const hy = LABEL_MARGIN_TOP + hover.row * CELL_SIZE;
 
       ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(LABEL_MARGIN_LEFT, hy, curGridW, cellSize);
-      ctx.strokeRect(hx, LABEL_MARGIN_TOP, cellSize, curGridH);
+      ctx.strokeRect(LABEL_MARGIN_LEFT, hy, gridWidth, CELL_SIZE);
+      ctx.strokeRect(hx, LABEL_MARGIN_TOP, CELL_SIZE, gridHeight);
 
       ctx.strokeStyle = '#38bdf8';
       ctx.lineWidth = 2;
-      ctx.strokeRect(hx, hy, cellSize, cellSize);
+      ctx.strokeRect(hx, hy, CELL_SIZE, CELL_SIZE);
     }
 
-    // 6. Draw Colorbar Legend (Log-Scale Viridis)
-    const cbX = LABEL_MARGIN_LEFT + totalL * cellSize + COLORBAR_MARGIN;
+    // 6. Draw Colorbar Legend (Log-Scale Viridis) in safe right gutter
+    const cbX = LABEL_MARGIN_LEFT + gridWidth + COLORBAR_MARGIN;
     const cbY = LABEL_MARGIN_TOP;
-    const cbH = Math.max(120, Math.min(totalL * cellSize, 320));
+    const cbH = Math.min(Math.max(160, gridHeight), 360);
 
     const gradient = ctx.createLinearGradient(cbX, cbY + cbH, cbX, cbY);
     for (let s = 0; s <= 20; s++) {
       const stopVal = s / 20;
-      // Use log scale viridis
       const [cr, cg, cb] = getViridisColor(stopVal, true);
       gradient.addColorStop(stopVal, `rgb(${cr}, ${cg}, ${cb})`);
     }
@@ -193,45 +198,47 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     ctx.fillStyle = '#64748b';
     ctx.font = '9px ui-sans-serif, system-ui';
     ctx.fillText('(Log-Scale)', cbX, cbY + cbH + 15);
-  }, [canvasWidth, canvasHeight, cellSize]);
+  }, []);
 
-  // Full redraw of offscreen canvas (for prefill, single-step, or post-generation layer change)
+  // Full redraw of offscreen canvas (for prefill, single-step inspect, or post-generation layer change)
   const redrawFullOffscreen = useCallback((mat: number[][], toks: string[]) => {
     const offscreen = offscreenCanvasRef.current;
     if (!offscreen || mat.length === 0) return;
 
     const numRows = mat.length;
-    const curCellSize = numRows <= 20 ? 26 : numRows <= 45 ? 20 : 16;
-    const reqW = numRows * curCellSize;
-    const reqH = numRows * curCellSize;
+    const reqDim = numRows * CELL_SIZE;
 
-    offscreen.width = reqW;
-    offscreen.height = reqH;
+    offscreen.width = reqDim;
+    offscreen.height = reqDim;
 
     const ctx = offscreen.getContext('2d');
     if (!ctx) return;
 
     ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, reqW, reqH);
+    ctx.fillRect(0, 0, reqDim, reqDim);
 
     // Render each cell with log-scale Viridis
+    // Strictly causal: query token i can ONLY attend to key token j <= i!
     for (let i = 0; i < numRows; i++) {
-      const rowLen = mat[i] ? mat[i].length : 0;
-      for (let j = 0; j < rowLen; j++) {
-        const val = mat[i][j] ?? 0;
+      const row = mat[i];
+      if (!row) continue;
+      const maxCol = Math.min(row.length, i + 1);
+      for (let j = 0; j < maxCol; j++) {
+        const val = row[j] ?? 0;
         const [r, g, b] = getViridisColor(val, true);
-        const x = j * curCellSize;
-        const y = i * curCellSize;
+        const x = j * CELL_SIZE;
+        const y = i * CELL_SIZE;
 
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-        ctx.fillRect(x, y, curCellSize, curCellSize);
+        ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
 
         ctx.strokeStyle = '#1e293b';
         ctx.lineWidth = 0.5;
-        ctx.strokeRect(x, y, curCellSize, curCellSize);
+        ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
       }
     }
 
+    setCurrentDim(numRows);
     renderVisibleCanvas(toks, null);
   }, [renderVisibleCanvas]);
 
@@ -240,13 +247,10 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     const offscreen = offscreenCanvasRef.current;
     if (!offscreen) return;
 
-    const numCols = weights.length;
-    const curCellSize = numCols <= 20 ? 26 : numCols <= 45 ? 20 : 16;
-    const newWidth = Math.max(offscreen.width, numCols * curCellSize);
-    const newHeight = (rowIdx + 1) * curCellSize;
+    const neededDim = (rowIdx + 1) * CELL_SIZE;
 
-    // Expand buffer if needed, preserving existing pixels
-    if (offscreen.width < newWidth || offscreen.height < newHeight) {
+    // Expand buffer if needed, strictly preserving existing pixels
+    if (offscreen.width < neededDim || offscreen.height < neededDim) {
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = offscreen.width;
       tempCanvas.height = offscreen.height;
@@ -255,13 +259,13 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
         tempCtx.drawImage(offscreen, 0, 0);
       }
 
-      offscreen.width = newWidth;
-      offscreen.height = newHeight;
+      offscreen.width = neededDim;
+      offscreen.height = neededDim;
 
       const ctx = offscreen.getContext('2d');
       if (ctx) {
         ctx.fillStyle = '#0f172a';
-        ctx.fillRect(0, 0, newWidth, newHeight);
+        ctx.fillRect(0, 0, neededDim, neededDim);
         if (tempCanvas.width > 0 && tempCanvas.height > 0) {
           ctx.drawImage(tempCanvas, 0, 0);
         }
@@ -272,32 +276,34 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     if (!ctx) return;
 
     // ONLY draw the new row (rowIdx)
-    const y = rowIdx * curCellSize;
+    const y = rowIdx * CELL_SIZE;
+    const numCols = Math.min(weights.length, rowIdx + 1);
     for (let j = 0; j < numCols; j++) {
       const val = weights[j] ?? 0;
       const [r, g, b] = getViridisColor(val, true);
-      const x = j * curCellSize;
+      const x = j * CELL_SIZE;
 
       ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-      ctx.fillRect(x, y, curCellSize, curCellSize);
+      ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
 
       ctx.strokeStyle = '#1e293b';
       ctx.lineWidth = 0.5;
-      ctx.strokeRect(x, y, curCellSize, curCellSize);
+      ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
     }
 
-    // Blit to visible canvas
+    setCurrentDim(toks.length);
     renderVisibleCanvas(toks, null);
 
     // Auto-scroll to bottom if enabled
-    if (autoScroll && containerRef.current && rowIdx > 20) {
+    if (autoScroll && containerRef.current && rowIdx > 12) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [autoScroll, renderVisibleCanvas]);
 
-  // Handle full matrix updates (prefill or static inspect)
+  // Handle full matrix updates (prefill, single-step inspect, or post-generation layer change)
   useEffect(() => {
-    if (matrix && matrix.length > 0) {
+    if (matrix && matrix.length > 0 && matrix !== lastMatrixRef.current) {
+      lastMatrixRef.current = matrix;
       localMatrixRef.current = matrix.map((row) => [...row]);
       localTokensRef.current = [...tokens];
       setHoverInfo(null);
@@ -305,7 +311,7 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     }
   }, [matrix, tokens, redrawFullOffscreen]);
 
-  // Handle incremental row streaming
+  // Handle incremental row streaming from WebSocket rAF pipeline
   useEffect(() => {
     if (incrementalRow) {
       const { rowIndex, token, weights } = incrementalRow;
@@ -331,8 +337,8 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    const col = Math.floor((x - LABEL_MARGIN_LEFT) / cellSize);
-    const row = Math.floor((y - LABEL_MARGIN_TOP) / cellSize);
+    const col = Math.floor((x - LABEL_MARGIN_LEFT) / CELL_SIZE);
+    const row = Math.floor((y - LABEL_MARGIN_TOP) / CELL_SIZE);
 
     if (row >= 0 && row < totalL && col >= 0 && col <= row) {
       const val = currentMatrix[row]?.[col] ?? 0;
@@ -368,7 +374,7 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
             Layer {layer} / Head {head}
           </span>
           <span className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono">
-            {L}×{L} Causal
+            {currentDim > 0 ? `${currentDim}×${currentDim} Causal` : '等待初始化'}
           </span>
           {isStreaming && (
             <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
@@ -377,7 +383,6 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
             </span>
           )}
         </div>
-
 
         <div className="flex items-center gap-3 text-xs">
           {/* Auto scroll toggle button */}
@@ -419,7 +424,6 @@ export const AttentionHeatmap: React.FC<AttentionHeatmapProps> = ({
       >
         <canvas
           ref={visibleCanvasRef}
-          style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px` }}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           className="cursor-crosshair block"

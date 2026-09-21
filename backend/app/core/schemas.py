@@ -31,6 +31,7 @@ class CreateSessionRequest(BaseModel):
 class StepRequest(BaseModel):
     temperature: float = Field(0.7, ge=0.0, le=2.0)
     top_k: int = Field(10, ge=1, le=100)
+    repetition_penalty: float = Field(1.2, ge=1.0, le=2.0, description="Repetition penalty factor")
     layer: int = Field(3, description="Target layer index")
     head: int = Field(0, description="Target head index")
 

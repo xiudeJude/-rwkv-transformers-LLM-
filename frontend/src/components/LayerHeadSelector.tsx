@@ -12,6 +12,8 @@ interface LayerHeadSelectorProps {
   onTemperatureChange: (temp: number) => void;
   topK: number;
   onTopKChange: (k: number) => void;
+  repetitionPenalty?: number;
+  onRepetitionPenaltyChange?: (penalty: number) => void;
   fullAttnLayers?: number[];
   disabled?: boolean;
   isStreaming?: boolean;
@@ -28,6 +30,8 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
   onTemperatureChange,
   topK,
   onTopKChange,
+  repetitionPenalty = 1.2,
+  onRepetitionPenaltyChange,
   fullAttnLayers = [],
   disabled = false,
   isStreaming = false,
@@ -174,6 +178,25 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
             ))}
           </div>
         </div>
+
+        {onRepetitionPenaltyChange && (
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-slate-400">Repetition Penalty (重复抑制):</span>
+              <span className="font-mono text-emerald-400">{repetitionPenalty.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min={1.0}
+              max={2.0}
+              step={0.05}
+              value={repetitionPenalty}
+              onChange={(e) => onRepetitionPenaltyChange(parseFloat(e.target.value))}
+              disabled={disabled}
+              className="w-full accent-emerald-500 bg-slate-800 rounded-lg cursor-pointer h-1.5"
+            />
+          </div>
+        )}
       </div>
     </div>
   );

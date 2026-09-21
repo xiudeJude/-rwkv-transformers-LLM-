@@ -99,6 +99,7 @@ class InferenceSession:
         self,
         temperature: float = 0.7,
         top_k: int = 10,
+        repetition_penalty: float = 1.2,
         target_layer: int = 3,
         target_head: int = 0
     ) -> Dict[str, Any]:
@@ -118,7 +119,18 @@ class InferenceSession:
             raise RuntimeError("Session has not executed prefill stage. Call prefill() first.")
 
         # 1. Sample next token from last_logits [1, vocab_size]
-        logits = self.last_logits[0].float()
+        logits = self.last_logits[0].clone().float()
+
+        # Apply repetition penalty to already seen token IDs to prevent repetitive loops
+        if repetition_penalty != 1.0 and len(self.token_ids) > 0:
+            seen_token_ids = set(self.token_ids)
+            for tid in seen_token_ids:
+                if 0 <= tid < len(logits):
+                    if logits[tid] > 0:
+                        logits[tid] = logits[tid] / repetition_penalty
+                    else:
+                        logits[tid] = logits[tid] * repetition_penalty
+
         softmax_probs = torch.softmax(logits, dim=-1)
 
         # Compute Top-K candidate probabilities for UI visualization

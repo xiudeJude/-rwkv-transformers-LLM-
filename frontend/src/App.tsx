@@ -38,6 +38,7 @@ export function App() {
   const [temperature, setTemperature] = useState(0.7);
   const [topK, setTopK] = useState(10);
   const [maxNewTokens, setMaxNewTokens] = useState(50);
+  const [repetitionPenalty, setRepetitionPenalty] = useState(1.2);
 
   // Model metadata & single-step inspect state
   const [singleLoading, setSingleLoading] = useState(false);
@@ -50,6 +51,9 @@ export function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [generatedText, setGeneratedText] = useState('');
+  const [tokenList, setTokenList] = useState<{ step: number; token: string }[]>([]);
+  const [inspectedStep, setInspectedStep] = useState<number | null>(null);
+  const [tokenClickMessage, setTokenClickMessage] = useState<string | null>(null);
   const [streamTopK, setStreamTopK] = useState<TokenCandidate[]>([]);
   const [streamNextToken, setStreamNextToken] = useState<TokenCandidate | null>(null);
   const [queueBacklog, setQueueBacklog] = useState(0);
@@ -72,6 +76,8 @@ export function App() {
   const pipelineRef = useRef<SmoothRenderPipeline | null>(null);
   const textEndRef = useRef<HTMLDivElement | null>(null);
   const promptTokensRef = useRef<string[]>([]);
+  const allTokensRef = useRef<string[]>([]);
+  const debounceTimerRef = useRef<number | null>(null);
 
   // Quick preset prompts
   const presets = [
@@ -159,6 +165,9 @@ export function App() {
     if (!prompt.trim() || isStreaming) return;
     setError(null);
     setGeneratedText('');
+    setTokenList([]);
+    setInspectedStep(null);
+    setTokenClickMessage(null);
     setCurrentStep(0);
     setStreamTopK([]);
     setStreamNextToken(null);
@@ -192,8 +201,9 @@ export function App() {
       // Initialize Heatmap with Prefill base matrix
       if (sessionData.prefill_attention) {
         promptTokensRef.current = sessionData.prefill_attention.tokens;
+        allTokensRef.current = [...sessionData.prefill_attention.tokens];
         setHeatmapMatrix(sessionData.prefill_attention.matrix);
-        setHeatmapTokens(sessionData.prefill_attention.tokens);
+        setHeatmapTokens([...sessionData.prefill_attention.tokens]);
       }
 
       setStreamStatus('connecting');
@@ -207,6 +217,7 @@ export function App() {
         onRenderToken: (item, metric) => {
           // rAF consumed a token
           setGeneratedText((prev) => prev + item.token);
+          setTokenList((prev) => [...prev, { step: item.step, token: item.token }]);
           setCurrentStep(item.step);
           setStreamNextToken({
             token: item.token,
@@ -216,6 +227,10 @@ export function App() {
           setStreamTopK(item.topk_candidates);
           setLatestMetric(metric);
           setQueueBacklog(pipeline.getQueueLength());
+
+          // Keep full sequence tokens in sync for heatmap axes
+          allTokensRef.current.push(item.token);
+          setHeatmapTokens([...allTokensRef.current]);
 
           // Incremental Canvas row append:
           if (item.attention_row && item.attention_row.length > 0) {
@@ -245,12 +260,13 @@ export function App() {
       ws.onopen = () => {
         setStreamStatus('streaming');
         setIsStreaming(true);
-        // Send start action
+        // Send start action with repetition_penalty
         ws.send(
           JSON.stringify({
             action: 'start',
             temperature,
             top_k: topK,
+            repetition_penalty: repetitionPenalty,
             max_new_tokens: maxNewTokens,
             layer: currentLayer,
             head: currentHead,
@@ -350,6 +366,46 @@ export function App() {
     } else if (inspectData && !isStreaming) {
       handleRunInspect(currentLayer, newHead);
     }
+  };
+
+  // Token Chip Click Inspector: fetch single-step Level 2 attention detail with debounce
+  const handleTokenClick = (stepNum: number) => {
+    if (isStreaming) {
+      setTokenClickMessage(
+        `流式生成进行中 (当前第 ${currentStep} 步)。已在下方热力图为您聚焦该 Token；生成完成后可点击任意 Token 深度回溯注意力全景矩阵。`
+      );
+      setTimeout(() => setTokenClickMessage(null), 4000);
+      return;
+    }
+
+    if (!activeSessionId) return;
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(async () => {
+      setInspectedStep(stepNum);
+      setHeatmapLoading(true);
+      setHeatmapLoadingMessage(`正在拉取 Step ${stepNum} 的注意力全景快照...`);
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/session/${activeSessionId}/attention?step=${stepNum}&layer=${currentLayer}&head=${currentHead}`
+        );
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.detail || `拉取失败 (${res.status})`);
+        }
+        const data: SessionAttentionResponse = await res.json();
+        setHeatmapMatrix(data.full_matrix);
+        setHeatmapTokens(data.tokens);
+        setIncrementalRow(null);
+      } catch (err: any) {
+        setError(err.message || '拉取步注意力数据失败');
+      } finally {
+        setHeatmapLoading(false);
+      }
+    }, 200); // 200ms debounce
   };
 
   // Computed timing statistics
@@ -706,7 +762,24 @@ export function App() {
 
           <div className="bg-slate-950 rounded-lg p-4 font-mono text-sm leading-relaxed border border-slate-800 min-h-[90px] max-h-56 overflow-y-auto">
             <span className="text-slate-500">{prompt}</span>
-            <span className="text-emerald-300 font-semibold ml-1">{generatedText}</span>
+            {tokenList.length > 0 ? (
+              tokenList.map((t) => (
+                <span
+                  key={t.step}
+                  onClick={() => handleTokenClick(t.step)}
+                  className={`cursor-pointer px-0.5 rounded transition-all inline-block ${
+                    inspectedStep === t.step
+                      ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-400 font-bold'
+                      : 'hover:bg-slate-800 hover:text-emerald-200 text-emerald-300 font-semibold'
+                  }`}
+                  title={`点击查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 注意力矩阵快照`}
+                >
+                  {t.token}
+                </span>
+              ))
+            ) : (
+              <span className="text-emerald-300 font-semibold ml-1">{generatedText}</span>
+            )}
             {isStreaming && (
               <span className="inline-block w-2 h-4 bg-emerald-400 ml-1 animate-pulse align-middle" />
             )}
@@ -717,6 +790,13 @@ export function App() {
             )}
             <div ref={textEndRef} />
           </div>
+
+          {tokenClickMessage && (
+            <div className="p-2 bg-indigo-500/10 border border-indigo-500/30 rounded text-xs text-indigo-300 animate-fade-in flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+              <span>{tokenClickMessage}</span>
+            </div>
+          )}
         </section>
 
         {/* Two Columns: Visualizer and Controls */}
@@ -762,6 +842,8 @@ export function App() {
               onTemperatureChange={setTemperature}
               topK={topK}
               onTopKChange={setTopK}
+              repetitionPenalty={repetitionPenalty}
+              onRepetitionPenaltyChange={setRepetitionPenalty}
               fullAttnLayers={modelMeta?.full_attn_layers}
               disabled={isStreaming || singleLoading}
               isStreaming={isStreaming}

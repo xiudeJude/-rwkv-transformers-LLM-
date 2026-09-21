@@ -79,6 +79,7 @@ async def session_step(session_id: str, req: StepRequest):
         step_result = session.step(
             temperature=req.temperature,
             top_k=req.top_k,
+            repetition_penalty=req.repetition_penalty,
             target_layer=req.layer,
             target_head=req.head
         )
@@ -142,6 +143,7 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
         # Extract and validate parameters
         temperature = float(msg.get("temperature", 0.55))
         top_k = int(msg.get("top_k", 10))
+        repetition_penalty = float(msg.get("repetition_penalty", 1.2))
         max_new_tokens = int(msg.get("max_new_tokens", 50))
         target_layer = int(msg.get("layer", 3))
         target_head = int(msg.get("head", 0))
@@ -180,6 +182,7 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
             step_res = session.step(
                 temperature=temperature,
                 top_k=top_k,
+                repetition_penalty=repetition_penalty,
                 target_layer=target_layer,
                 target_head=target_head
             )
