@@ -17,6 +17,7 @@ interface LayerHeadSelectorProps {
   fullAttnLayers?: number[];
   disabled?: boolean;
   isStreaming?: boolean;
+  modelType?: 'transformer' | 'rwkv';
 }
 
 export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
@@ -35,6 +36,7 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
   fullAttnLayers = [],
   disabled = false,
   isStreaming = false,
+  modelType = 'transformer',
 }) => {
   const isHybrid = fullAttnLayers.length > 0 && fullAttnLayers.length < numLayers;
   const isFullAttn = !isHybrid || fullAttnLayers.includes(currentLayer);
@@ -66,7 +68,9 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
       {/* Layer selector slider & buttons */}
       <div>
         <div className="flex items-center justify-between text-xs mb-1.5">
-          <span className="text-slate-400">选择 Transformer 层 (Layer):</span>
+          <span className="text-slate-400">
+            {modelType === 'rwkv' ? '选择 RWKV 状态递推层 (Layer):' : '选择 Transformer 层 (Layer):'}
+          </span>
           <span className="font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
             Layer {currentLayer} / {Math.max(0, numLayers - 1)}
           </span>
@@ -112,7 +116,9 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
       {/* Head selector */}
       <div>
         <div className="flex items-center justify-between text-xs mb-1.5">
-          <span className="text-slate-400">选择注意力头 (Head):</span>
+          <span className="text-slate-400">
+            {modelType === 'rwkv' ? '选择状态观察头 (Head):' : '选择注意力头 (Head):'}
+          </span>
           <span className="font-mono font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
             Head {currentHead} / {Math.max(0, numHeads - 1)}
           </span>

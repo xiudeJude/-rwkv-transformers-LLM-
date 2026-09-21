@@ -1,4 +1,6 @@
-import type { TokenStepPayload } from '../types/schema';
+import type { TokenStepPayload, RWKVTokenStepPayload } from '../types/schema';
+
+export type AnyTokenStepPayload = TokenStepPayload | RWKVTokenStepPayload;
 
 export interface TokenTimingMetric {
   step: number;
@@ -11,13 +13,13 @@ export interface TokenTimingMetric {
 }
 
 export interface PipelineCallbacks {
-  onRenderToken: (item: TokenStepPayload, metrics: TokenTimingMetric) => void;
+  onRenderToken: (item: AnyTokenStepPayload, metrics: TokenTimingMetric) => void;
   onFinish?: () => void;
   onMetricsUpdate?: (allMetrics: TokenTimingMetric[]) => void;
 }
 
 export class SmoothRenderPipeline {
-  private queue: { item: TokenStepPayload; arrivedAt: number }[] = [];
+  private queue: { item: AnyTokenStepPayload; arrivedAt: number }[] = [];
   private isRunning: boolean = false;
   private rafId: number | null = null;
   private lastRenderTime: number = 0;
@@ -34,7 +36,7 @@ export class SmoothRenderPipeline {
     this.callbacks = callbacks;
   }
 
-  public push(item: TokenStepPayload) {
+  public push(item: AnyTokenStepPayload) {
     const now = performance.now();
     this.queue.push({ item, arrivedAt: now });
     if (!this.isRunning) {

@@ -16,14 +16,17 @@ import {
   ChevronUp
 } from 'lucide-react';
 import { AttentionHeatmap, type IncrementalRowPayload } from './components/Visualizers/AttentionHeatmap';
+import { RWKVWaterfall, type RWKVIncrementalRowPayload } from './components/Visualizers/RWKVWaterfall';
+import { RWKVStateModal } from './components/Visualizers/RWKVStateModal';
 import { TopKBarChart } from './components/Visualizers/TopKBarChart';
 import { LayerHeadSelector } from './components/LayerHeadSelector';
-import { SmoothRenderPipeline, type TokenTimingMetric } from './utils/renderPipeline';
+import { SmoothRenderPipeline, type TokenTimingMetric, type AnyTokenStepPayload } from './utils/renderPipeline';
 import type {
   SingleStepInspectResponse,
   ModelMetadata,
   TokenCandidate,
-  TokenStepPayload,
+  RWKVTokenStepPayload,
+  RWKVStateResponse,
   SessionAttentionResponse
 } from './types/schema';
 
@@ -33,12 +36,22 @@ type StreamStatus = 'idle' | 'creating_session' | 'connecting' | 'streaming' | '
 
 export function App() {
   const [prompt, setPrompt] = useState('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
+  const [modelArch, setModelArch] = useState<'transformer' | 'rwkv'>('transformer');
   const [currentLayer, setCurrentLayer] = useState(3);
   const [currentHead, setCurrentHead] = useState(0);
   const [temperature, setTemperature] = useState(0.7);
   const [topK, setTopK] = useState(10);
   const [maxNewTokens, setMaxNewTokens] = useState(50);
   const [repetitionPenalty, setRepetitionPenalty] = useState(1.2);
+
+  // RWKV waterfall state
+  const [rwkvSummaries, setRwkvSummaries] = useState<number[][]>([]);
+  const [rwkvDeltas, setRwkvDeltas] = useState<number[][]>([]);
+  const [rwkvIncrementalRow, setRwkvIncrementalRow] = useState<RWKVIncrementalRowPayload | null>(null);
+  const [rwkvTokens, setRwkvTokens] = useState<string[]>([]);
+  const [rwkvModalMatrix, setRwkvModalMatrix] = useState<number[][] | null>(null);
+  const [rwkvModalNorm, setRwkvModalNorm] = useState<number | undefined>(undefined);
+  const [isRwkvModalOpen, setIsRwkvModalOpen] = useState(false);
 
   // Model metadata & single-step inspect state
   const [singleLoading, setSingleLoading] = useState(false);
@@ -160,6 +173,50 @@ export function App() {
     }
   };
 
+  // Architecture switch handler
+  const handleArchSwitch = (newArch: 'transformer' | 'rwkv') => {
+    if (isStreaming) return;
+    setModelArch(newArch);
+    setActiveSessionId(null);
+    setGeneratedText('');
+    setTokenList([]);
+    setInspectedStep(null);
+    setTokenClickMessage(null);
+    setTimingMetrics([]);
+    setLatestMetric(null);
+    setHeatmapMatrix(null);
+    setRwkvSummaries([]);
+    setRwkvDeltas([]);
+    setRwkvIncrementalRow(null);
+    setStreamStatus('idle');
+
+    if (newArch === 'transformer') {
+      setPrompt('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
+      fetch(`${API_BASE}/api/model/info?model_type=transformer`)
+        .then((res) => res.json())
+        .then((data: ModelMetadata) => {
+          setModelMeta(data);
+          if (data.full_attn_layers && data.full_attn_layers.length > 0) {
+            setCurrentLayer(data.full_attn_layers[0]);
+          } else {
+            setCurrentLayer(3);
+          }
+          setCurrentHead(0);
+        })
+        .catch(console.warn);
+    } else {
+      setPrompt('RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度');
+      fetch(`${API_BASE}/api/model/info?model_type=rwkv`)
+        .then((res) => res.json())
+        .then((data: ModelMetadata) => {
+          setModelMeta(data);
+          setCurrentLayer(0);
+          setCurrentHead(0);
+        })
+        .catch(console.warn);
+    }
+  };
+
   // Handler: Start WebSocket Streaming Generation
   const handleStartStreaming = async () => {
     if (!prompt.trim() || isStreaming) return;
@@ -175,11 +232,21 @@ export function App() {
     setLatestMetric(null);
     setQueueBacklog(0);
     setIncrementalRow(null);
+    setRwkvIncrementalRow(null);
     setStreamStatus('creating_session');
+
+    if (wsRef.current) {
+      try {
+        wsRef.current.send(JSON.stringify({ action: 'close' }));
+        wsRef.current.close();
+      } catch (e) {}
+      wsRef.current = null;
+    }
 
     try {
       // 1. Create session via synchronous HTTP prefill
-      const createRes = await fetch(`${API_BASE}/api/session/create`, {
+      const createEndpoint = modelArch === 'transformer' ? '/api/session/create' : '/api/rwkv/session/create';
+      const createRes = await fetch(`${API_BASE}${createEndpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -198,12 +265,19 @@ export function App() {
       const sessionId = sessionData.session_id;
       setActiveSessionId(sessionId);
 
-      // Initialize Heatmap with Prefill base matrix
-      if (sessionData.prefill_attention) {
+      // Initialize Visualization buffers with Prefill data
+      if (modelArch === 'transformer' && sessionData.prefill_attention) {
         promptTokensRef.current = sessionData.prefill_attention.tokens;
         allTokensRef.current = [...sessionData.prefill_attention.tokens];
         setHeatmapMatrix(sessionData.prefill_attention.matrix);
         setHeatmapTokens([...sessionData.prefill_attention.tokens]);
+      } else if (modelArch === 'rwkv' && sessionData.prefill_state) {
+        const pState = sessionData.prefill_state;
+        promptTokensRef.current = pState.tokens;
+        allTokensRef.current = [...pState.tokens];
+        setRwkvTokens([...pState.tokens]);
+        setRwkvSummaries([pState.state_summary]);
+        setRwkvDeltas([pState.delta]);
       }
 
       setStreamStatus('connecting');
@@ -228,17 +302,30 @@ export function App() {
           setLatestMetric(metric);
           setQueueBacklog(pipeline.getQueueLength());
 
-          // Keep full sequence tokens in sync for heatmap axes
+          // Keep full sequence tokens in sync for axes
           allTokensRef.current.push(item.token);
-          setHeatmapTokens([...allTokensRef.current]);
 
-          // Incremental Canvas row append:
-          if (item.attention_row && item.attention_row.length > 0) {
-            setIncrementalRow({
-              rowIndex: promptTokensRef.current.length + item.step - 1,
-              token: item.token,
-              weights: item.attention_row,
-            });
+          if (modelArch === 'transformer') {
+            setHeatmapTokens([...allTokensRef.current]);
+            // Incremental Canvas row append:
+            if (item.attention_row && item.attention_row.length > 0) {
+              setIncrementalRow({
+                rowIndex: promptTokensRef.current.length + item.step - 1,
+                token: item.token,
+                weights: item.attention_row,
+              });
+            }
+          } else {
+            const rwkvItem = item as RWKVTokenStepPayload;
+            setRwkvTokens([...allTokensRef.current]);
+            if (rwkvItem.state_summary && rwkvItem.delta) {
+              setRwkvIncrementalRow({
+                step: rwkvItem.step,
+                token: rwkvItem.token,
+                state_summary: rwkvItem.state_summary,
+                delta: rwkvItem.delta,
+              });
+            }
           }
         },
         onMetricsUpdate: (allMetrics) => {
@@ -253,7 +340,11 @@ export function App() {
       pipelineRef.current = pipeline;
 
       // 3. Connect WebSocket
-      const wsUrl = `ws://127.0.0.1:8000/ws/session/${sessionId}/stream`;
+      const wsEndpoint =
+        modelArch === 'transformer'
+          ? `/ws/session/${sessionId}/stream`
+          : `/ws/rwkv/session/${sessionId}/stream`;
+      const wsUrl = `ws://127.0.0.1:8000${wsEndpoint}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -276,7 +367,7 @@ export function App() {
 
       ws.onmessage = (event) => {
         try {
-          const data: TokenStepPayload = JSON.parse(event.data);
+          const data: AnyTokenStepPayload = JSON.parse(event.data);
           if (data.type === 'error') {
             setError(data.message || '推理服务返回错误');
             setStreamStatus('error');
@@ -323,7 +414,7 @@ export function App() {
     setStreamStatus('stopped');
   };
 
-  // Level 2 Backfill when user switches Layer/Head after generation has finished
+  // Level 2 Backfill for Transformer when user switches Layer/Head after generation has finished
   const handleRefetchSessionAttention = async (sessId: string, targetLayer: number, targetHead: number) => {
     setHeatmapLoading(true);
     setHeatmapLoadingMessage(`正在回填 Layer ${targetLayer} / Head ${targetHead} 全量注意力矩阵...`);
@@ -349,12 +440,58 @@ export function App() {
     }
   };
 
+  // Level 2 Backfill for RWKV when user switches Layer after generation has finished
+  const handleRefetchRwkvLayer = async (sessId: string, targetLayer: number) => {
+    setHeatmapLoading(true);
+    setHeatmapLoadingMessage(`正在回填 RWKV Layer ${targetLayer} 历史状态数据...`);
+    setError(null);
+
+    try {
+      const totalSteps = tokenList.length; // step 0 is prefill, 1..N
+      const stepPromises = [];
+      for (let s = 0; s <= totalSteps; s++) {
+        stepPromises.push(
+          fetch(`${API_BASE}/api/session/${sessId}/rwkv_state?step=${s}&layer=${targetLayer}`).then(
+            (res) => {
+              if (!res.ok) throw new Error(`回填 Step ${s} 失败`);
+              return res.json();
+            }
+          )
+        );
+      }
+      const results = await Promise.all(stepPromises);
+      const newSummaries: number[][] = [];
+      const newDeltas: number[][] = [];
+      for (let s = 0; s < results.length; s++) {
+        const norms: number[] = results[s].head_norms || [];
+        newSummaries.push(norms);
+        if (s === 0) {
+          newDeltas.push(new Array(16).fill(0));
+        } else {
+          const prev = newSummaries[s - 1];
+          newDeltas.push(norms.map((v, idx) => Math.round((v - prev[idx]) * 1e6) / 1e6));
+        }
+      }
+      setRwkvSummaries(newSummaries);
+      setRwkvDeltas(newDeltas);
+      setRwkvIncrementalRow(null);
+    } catch (err: any) {
+      setError(err.message || '回填 RWKV 状态数据失败');
+    } finally {
+      setHeatmapLoading(false);
+    }
+  };
+
   const handleLayerChange = async (newLayer: number) => {
     setCurrentLayer(newLayer);
-    // If active session exists and generation is finished/stopped, fetch Level 2 attention to backfill
+    // If active session exists and generation is finished/stopped, fetch Level 2 data to backfill
     if (activeSessionId && (streamStatus === 'finished' || streamStatus === 'stopped')) {
-      await handleRefetchSessionAttention(activeSessionId, newLayer, currentHead);
-    } else if (inspectData && !isStreaming) {
+      if (modelArch === 'transformer') {
+        await handleRefetchSessionAttention(activeSessionId, newLayer, currentHead);
+      } else {
+        await handleRefetchRwkvLayer(activeSessionId, newLayer);
+      }
+    } else if (inspectData && !isStreaming && modelArch === 'transformer') {
       handleRunInspect(newLayer, currentHead);
     }
   };
@@ -362,8 +499,10 @@ export function App() {
   const handleHeadChange = async (newHead: number) => {
     setCurrentHead(newHead);
     if (activeSessionId && (streamStatus === 'finished' || streamStatus === 'stopped')) {
-      await handleRefetchSessionAttention(activeSessionId, currentLayer, newHead);
-    } else if (inspectData && !isStreaming) {
+      if (modelArch === 'transformer') {
+        await handleRefetchSessionAttention(activeSessionId, currentLayer, newHead);
+      }
+    } else if (inspectData && !isStreaming && modelArch === 'transformer') {
       handleRunInspect(currentLayer, newHead);
     }
   };
@@ -372,7 +511,7 @@ export function App() {
   const handleTokenClick = (stepNum: number) => {
     if (isStreaming) {
       setTokenClickMessage(
-        `流式生成进行中 (当前第 ${currentStep} 步)。已在下方热力图为您聚焦该 Token；生成完成后可点击任意 Token 深度回溯注意力全景矩阵。`
+        `流式生成进行中 (当前第 ${currentStep} 步)。已为您聚焦该 Token；生成完成后可点击任意 Token 深度回溯状态全景。`
       );
       setTimeout(() => setTokenClickMessage(null), 4000);
       return;
@@ -386,6 +525,28 @@ export function App() {
 
     debounceTimerRef.current = setTimeout(async () => {
       setInspectedStep(stepNum);
+
+      if (modelArch === 'rwkv') {
+        setHeatmapLoading(true);
+        setHeatmapLoadingMessage(`正在提取 Step ${stepNum} 隐状态详细矩阵...`);
+        try {
+          const res = await fetch(
+            `${API_BASE}/api/session/${activeSessionId}/rwkv_state?step=${stepNum}&layer=${currentLayer}&head=${currentHead}`
+          );
+          if (!res.ok) throw new Error(`拉取失败 (${res.status})`);
+          const data: RWKVStateResponse = await res.json();
+          setRwkvModalMatrix(data.matrix as number[][]);
+          setRwkvModalNorm(data.head_norms?.[currentHead]);
+          setIsRwkvModalOpen(true);
+        } catch (err: any) {
+          setError(err.message || '拉取 RWKV 状态矩阵失败');
+        } finally {
+          setHeatmapLoading(false);
+        }
+        return;
+      }
+
+      // Transformer branch
       setHeatmapLoading(true);
       setHeatmapLoadingMessage(`正在拉取 Step ${stepNum} 的注意力全景快照...`);
       try {
@@ -405,7 +566,7 @@ export function App() {
       } finally {
         setHeatmapLoading(false);
       }
-    }, 200); // 200ms debounce
+    }, 150);
   };
 
   // Computed timing statistics
@@ -472,13 +633,43 @@ export function App() {
             <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
               LLM 可解释性交互工坊
               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                P0-Step4: 双层 Canvas 动态生长热力图
+                P1: 双架构对比 (Transformer vs RWKV)
               </span>
             </h1>
             <p className="text-[11px] text-slate-400">
-              离屏缓冲逐行增量绘制 • 60 FPS 平滑渲染 • Log-scale 色谱映射
+              {modelArch === 'transformer'
+                ? 'Full Attention 离屏双缓冲增量绘制 • 60 FPS 平滑渲染 • Log-scale 色谱'
+                : 'RWKV-7 隐藏状态瀑布流 • 能量模长演化(Viridis)与单步扰动(Coolwarm) • Level 2 状态探针'}
             </p>
           </div>
+        </div>
+
+        {/* Architecture Switcher Tabs */}
+        <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
+          <button
+            onClick={() => handleArchSwitch('transformer')}
+            disabled={isStreaming}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              modelArch === 'transformer'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Transformer (Qwen3.5)</span>
+          </button>
+          <button
+            onClick={() => handleArchSwitch('rwkv')}
+            disabled={isStreaming}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              modelArch === 'rwkv'
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/30'
+                : 'text-slate-400 hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>RWKV-7 (Goose 0.4B)</span>
+          </button>
         </div>
 
         {/* Model Meta Badge */}
@@ -487,7 +678,7 @@ export function App() {
             <Cpu className="w-3.5 h-3.5 text-sky-400" />
             <span className="text-slate-400">当前引擎:</span>
             <span className="font-mono text-sky-300 font-semibold">
-              {modelMeta?.model_id || 'Qwen3.5-0.8B (GGUF Q8_0)'}
+              {modelMeta?.model_id || (modelArch === 'transformer' ? 'Qwen3.5-0.8B (GGUF)' : 'RWKV7-0.4B (FP16)')}
             </span>
           </div>
 
@@ -557,23 +748,25 @@ export function App() {
                 </button>
               )}
 
-              <button
-                onClick={() => handleRunInspect(currentLayer, currentHead)}
-                disabled={singleLoading || isStreaming || !prompt.trim()}
-                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-medium text-slate-300 text-xs border border-slate-700 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-              >
-                {singleLoading ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Hooking...</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-3.5 h-3.5 text-amber-400" />
-                    <span>单步 Hook 分析</span>
-                  </>
-                )}
-              </button>
+              {modelArch === 'transformer' && (
+                <button
+                  onClick={() => handleRunInspect(currentLayer, currentHead)}
+                  disabled={singleLoading || isStreaming || !prompt.trim()}
+                  className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-medium text-slate-300 text-xs border border-slate-700 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  {singleLoading ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Hooking...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      <span>单步 Hook 分析</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
 
@@ -772,7 +965,11 @@ export function App() {
                       ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-400 font-bold'
                       : 'hover:bg-slate-800 hover:text-emerald-200 text-emerald-300 font-semibold'
                   }`}
-                  title={`点击查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 注意力矩阵快照`}
+                  title={
+                    modelArch === 'transformer'
+                      ? `点击查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 注意力矩阵快照`
+                      : `点击下钻查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 64x64 隐状态矩阵`
+                  }
                 >
                   {t.token}
                 </span>
@@ -785,7 +982,9 @@ export function App() {
             )}
             {!generatedText && !isStreaming && (
               <span className="text-slate-600 text-xs italic ml-2">
-                (点击"流式生成 (WS)"体验自回归增量生成与双层 Canvas 动态热力图...)
+                {modelArch === 'transformer'
+                  ? '(点击"流式生成 (WS)"体验自回归增量生成与双层 Canvas 动态热力图...)'
+                  : '(点击"流式生成 (WS)"体验 RWKV-7 隐藏状态模长与差分时序瀑布流...)'}
               </span>
             )}
             <div ref={textEndRef} />
@@ -801,31 +1000,62 @@ export function App() {
 
         {/* Two Columns: Visualizer and Controls */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left 2 Cols: Dual-Canvas Incremental Attention Heatmap */}
+          {/* Left 2 Cols: Dual-Canvas Incremental Heatmap or RWKV Dual-Ribbon Waterfall */}
           <div className="lg:col-span-2 space-y-4">
-            {heatmapMatrix ? (
-              <AttentionHeatmap
-                matrix={heatmapMatrix}
-                tokens={heatmapTokens}
-                layer={currentLayer}
-                head={currentHead}
-                incrementalRow={incrementalRow}
-                isStreaming={isStreaming}
-                isLoading={heatmapLoading}
-                loadingMessage={heatmapLoadingMessage}
-              />
+            {modelArch === 'transformer' ? (
+              heatmapMatrix ? (
+                <AttentionHeatmap
+                  matrix={heatmapMatrix}
+                  tokens={heatmapTokens}
+                  layer={currentLayer}
+                  head={currentHead}
+                  incrementalRow={incrementalRow}
+                  isStreaming={isStreaming}
+                  isLoading={heatmapLoading}
+                  loadingMessage={heatmapLoadingMessage}
+                />
+              ) : (
+                <div className="h-96 rounded-xl border border-dashed border-slate-800 flex flex-col items-center justify-center text-slate-500 space-y-3 p-6 text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-slate-600 border border-slate-800">
+                    <Layers className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-300 font-medium">Attention 热力图就绪</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      点击"流式生成 (WS)"或"单步 Hook 分析"，Canvas 将实时展现自回归注意力矩阵！
+                    </p>
+                  </div>
+                </div>
+              )
             ) : (
-              <div className="h-96 rounded-xl border border-dashed border-slate-800 flex flex-col items-center justify-center text-slate-500 space-y-3 p-6 text-center">
-                <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-slate-600 border border-slate-800">
-                  <Layers className="w-6 h-6" />
+              /* RWKV Mode: Waterfall or Empty State */
+              rwkvSummaries.length > 0 || rwkvIncrementalRow || isStreaming ? (
+                <RWKVWaterfall
+                  layer={currentLayer}
+                  head={currentHead}
+                  tokens={rwkvTokens}
+                  initialSummaries={rwkvSummaries}
+                  initialDeltas={rwkvDeltas}
+                  incrementalRow={rwkvIncrementalRow}
+                  isStreaming={isStreaming}
+                  isLoading={heatmapLoading}
+                  loadingMessage={heatmapLoadingMessage}
+                  onStepClick={handleTokenClick}
+                  inspectedStep={inspectedStep}
+                />
+              ) : (
+                <div className="h-96 rounded-xl border border-dashed border-slate-800 flex flex-col items-center justify-center text-slate-500 space-y-3 p-6 text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-emerald-400/80 border border-slate-800">
+                    <Activity className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-300 font-medium">RWKV-7 状态瀑布流就绪</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      点击"流式生成 (WS)"，Canvas 将实时展现 16 头隐藏状态能量演化与单步差分！
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm text-slate-300 font-medium">Attention 热力图就绪</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    点击"流式生成 (WS)"或"单步 Hook 分析"，Canvas 将实时展现自回归注意力矩阵！
-                  </p>
-                </div>
-              </div>
+              )
             )}
           </div>
 
@@ -833,7 +1063,7 @@ export function App() {
           <div className="space-y-4">
             <LayerHeadSelector
               numLayers={modelMeta?.num_layers || 24}
-              numHeads={modelMeta?.num_heads || 8}
+              numHeads={modelArch === 'rwkv' ? 16 : (modelMeta?.num_heads || 8)}
               currentLayer={currentLayer}
               currentHead={currentHead}
               onLayerChange={handleLayerChange}
@@ -844,9 +1074,10 @@ export function App() {
               onTopKChange={setTopK}
               repetitionPenalty={repetitionPenalty}
               onRepetitionPenaltyChange={setRepetitionPenalty}
-              fullAttnLayers={modelMeta?.full_attn_layers}
+              fullAttnLayers={modelArch === 'transformer' ? modelMeta?.full_attn_layers : undefined}
               disabled={isStreaming || singleLoading}
               isStreaming={isStreaming}
+              modelType={modelArch}
             />
 
             {/* Show Top-K Candidates from either live stream or single step */}
@@ -858,6 +1089,20 @@ export function App() {
           </div>
         </section>
       </main>
+
+      {/* RWKV Level 2 State Inspection Modal */}
+      {isRwkvModalOpen && rwkvModalMatrix && (
+        <RWKVStateModal
+          isOpen={isRwkvModalOpen}
+          onClose={() => setIsRwkvModalOpen(false)}
+          step={inspectedStep ?? 0}
+          layer={currentLayer}
+          head={currentHead}
+          token={tokenList.find((t) => t.step === inspectedStep)?.token}
+          matrix={rwkvModalMatrix}
+          headNorm={rwkvModalNorm}
+        />
+      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-800/80 bg-slate-900/40 py-3 text-center text-xs text-slate-500">

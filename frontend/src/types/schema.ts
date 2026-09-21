@@ -67,3 +67,22 @@ export interface SessionAttentionResponse {
   full_matrix: number[][];
 }
 
+export interface RWKVTokenStepPayload extends TokenStepPayload {
+  state_summary?: number[]; // length 16
+  delta?: number[];         // length 16
+  layer?: number;
+}
+
+export interface RWKVStateResponse {
+  status: string;
+  session_id: string;
+  step: number;
+  layer: number;
+  head?: number | null;
+  tokens: string[];
+  shape: number[];
+  head_norms: number[];
+  matrix: number[][] | number[][][]; // [64, 64] if head specified, else [16, 64, 64]
+}
+
+
