@@ -185,7 +185,7 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
             )
             tokens_generated += 1
 
-            # Level 1 lightweight message strictly without large matrices
+            # Level 1 lightweight message with single-row attention slice
             level1_payload = {
                 "type": "token_step",
                 "step": step_res["step"],
@@ -193,6 +193,7 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
                 "token_id": step_res["token_id"],
                 "token_prob": step_res["token_prob"],
                 "topk_candidates": step_res["topk_candidates"],
+                "attention_row": step_res["attention_slice"]["weights"],
                 "is_finished": step_res["is_finished"]
             }
             await websocket.send_json(level1_payload)
@@ -212,9 +213,11 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
                 "token_id": -1,
                 "token_prob": 0.0,
                 "topk_candidates": [],
+                "attention_row": [],
                 "is_finished": True,
                 "finish_reason": "max_new_tokens"
             })
+
 
         # Wait while client decides next action or disconnects
         while not stop_event.is_set():

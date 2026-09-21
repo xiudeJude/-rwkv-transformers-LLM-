@@ -5,7 +5,6 @@ import {
   Cpu,
   RefreshCw,
   Zap,
-  Info,
   Sliders,
   Play,
   Square,
@@ -16,7 +15,7 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
-import { AttentionHeatmap } from './components/Visualizers/AttentionHeatmap';
+import { AttentionHeatmap, type IncrementalRowPayload } from './components/Visualizers/AttentionHeatmap';
 import { TopKBarChart } from './components/Visualizers/TopKBarChart';
 import { LayerHeadSelector } from './components/LayerHeadSelector';
 import { SmoothRenderPipeline, type TokenTimingMetric } from './utils/renderPipeline';
@@ -24,7 +23,8 @@ import type {
   SingleStepInspectResponse,
   ModelMetadata,
   TokenCandidate,
-  TokenStepPayload
+  TokenStepPayload,
+  SessionAttentionResponse
 } from './types/schema';
 
 const API_BASE = 'http://127.0.0.1:8000';
@@ -53,6 +53,14 @@ export function App() {
   const [streamTopK, setStreamTopK] = useState<TokenCandidate[]>([]);
   const [streamNextToken, setStreamNextToken] = useState<TokenCandidate | null>(null);
   const [queueBacklog, setQueueBacklog] = useState(0);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  // Heatmap state
+  const [heatmapMatrix, setHeatmapMatrix] = useState<number[][] | null>(null);
+  const [heatmapTokens, setHeatmapTokens] = useState<string[]>([]);
+  const [incrementalRow, setIncrementalRow] = useState<IncrementalRowPayload | null>(null);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
+  const [heatmapLoadingMessage, setHeatmapLoadingMessage] = useState('');
 
   // Timing & queue metrics
   const [timingMetrics, setTimingMetrics] = useState<TokenTimingMetric[]>([]);
@@ -63,6 +71,7 @@ export function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const pipelineRef = useRef<SmoothRenderPipeline | null>(null);
   const textEndRef = useRef<HTMLDivElement | null>(null);
+  const promptTokensRef = useRef<string[]>([]);
 
   // Quick preset prompts
   const presets = [
@@ -110,6 +119,8 @@ export function App() {
     if (!prompt.trim() || isStreaming) return;
     setSingleLoading(true);
     setError(null);
+    setActiveSessionId(null);
+    setIncrementalRow(null);
 
     try {
       const res = await fetch(`${API_BASE}/api/inspect/single-step`, {
@@ -131,6 +142,8 @@ export function App() {
 
       const data: SingleStepInspectResponse = await res.json();
       setInspectData(data);
+      setHeatmapMatrix(data.attention.matrix);
+      setHeatmapTokens(data.attention.tokens);
       if (data.model_meta) {
         setModelMeta(data.model_meta);
       }
@@ -152,6 +165,7 @@ export function App() {
     setTimingMetrics([]);
     setLatestMetric(null);
     setQueueBacklog(0);
+    setIncrementalRow(null);
     setStreamStatus('creating_session');
 
     try {
@@ -173,6 +187,14 @@ export function App() {
 
       const sessionData = await createRes.json();
       const sessionId = sessionData.session_id;
+      setActiveSessionId(sessionId);
+
+      // Initialize Heatmap with Prefill base matrix
+      if (sessionData.prefill_attention) {
+        promptTokensRef.current = sessionData.prefill_attention.tokens;
+        setHeatmapMatrix(sessionData.prefill_attention.matrix);
+        setHeatmapTokens(sessionData.prefill_attention.tokens);
+      }
 
       setStreamStatus('connecting');
 
@@ -194,6 +216,15 @@ export function App() {
           setStreamTopK(item.topk_candidates);
           setLatestMetric(metric);
           setQueueBacklog(pipeline.getQueueLength());
+
+          // Incremental Canvas row append:
+          if (item.attention_row && item.attention_row.length > 0) {
+            setIncrementalRow({
+              rowIndex: promptTokensRef.current.length + item.step - 1,
+              token: item.token,
+              weights: item.attention_row,
+            });
+          }
         },
         onMetricsUpdate: (allMetrics) => {
           setTimingMetrics([...allMetrics]);
@@ -238,7 +269,7 @@ export function App() {
             return;
           }
 
-          // STRICT: onmessage ONLY enqueues to pipeline, does NOT trigger setState or Canvas draw
+          // STRICT: onmessage ONLY enqueues to pipeline, does NOT trigger setState or Canvas draw directly!
           pipeline.push(data);
           setQueueBacklog(pipeline.getQueueLength());
         } catch (e: any) {
@@ -276,35 +307,97 @@ export function App() {
     setStreamStatus('stopped');
   };
 
-  const handleLayerChange = (newLayer: number) => {
+  // Level 2 Backfill when user switches Layer/Head after generation has finished
+  const handleRefetchSessionAttention = async (sessId: string, targetLayer: number, targetHead: number) => {
+    setHeatmapLoading(true);
+    setHeatmapLoadingMessage(`正在回填 Layer ${targetLayer} / Head ${targetHead} 全量注意力矩阵...`);
+    setError(null);
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/session/${sessId}/attention?layer=${targetLayer}&head=${targetHead}`
+      );
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `回填失败 (${res.status})`);
+      }
+
+      const data: SessionAttentionResponse = await res.json();
+      setHeatmapMatrix(data.full_matrix);
+      setHeatmapTokens(data.tokens);
+      setIncrementalRow(null); // Switch to full redraw mode with new matrix
+    } catch (err: any) {
+      setError(err.message || '回填注意力数据失败');
+    } finally {
+      setHeatmapLoading(false);
+    }
+  };
+
+  const handleLayerChange = async (newLayer: number) => {
     setCurrentLayer(newLayer);
-    if (inspectData && !isStreaming) {
+    // If active session exists and generation is finished/stopped, fetch Level 2 attention to backfill
+    if (activeSessionId && (streamStatus === 'finished' || streamStatus === 'stopped')) {
+      await handleRefetchSessionAttention(activeSessionId, newLayer, currentHead);
+    } else if (inspectData && !isStreaming) {
       handleRunInspect(newLayer, currentHead);
     }
   };
 
-  const handleHeadChange = (newHead: number) => {
+  const handleHeadChange = async (newHead: number) => {
     setCurrentHead(newHead);
-    if (inspectData && !isStreaming) {
+    if (activeSessionId && (streamStatus === 'finished' || streamStatus === 'stopped')) {
+      await handleRefetchSessionAttention(activeSessionId, currentLayer, newHead);
+    } else if (inspectData && !isStreaming) {
       handleRunInspect(currentLayer, newHead);
     }
   };
 
   // Computed timing statistics
-  const avgArrivalDelta = timingMetrics.length > 1
-    ? Math.round((timingMetrics.slice(1).reduce((sum, m) => sum + m.arrivalDeltaMs, 0) / (timingMetrics.length - 1)) * 10) / 10
-    : 0;
-  const avgRenderDelta = timingMetrics.length > 1
-    ? Math.round((timingMetrics.slice(1).reduce((sum, m) => sum + m.renderDeltaMs, 0) / (timingMetrics.length - 1)) * 10) / 10
-    : 0;
+  const avgArrivalDelta =
+    timingMetrics.length > 1
+      ? Math.round(
+          (timingMetrics.slice(1).reduce((sum, m) => sum + m.arrivalDeltaMs, 0) /
+            (timingMetrics.length - 1)) *
+            10
+        ) / 10
+      : 0;
+  const avgRenderDelta =
+    timingMetrics.length > 1
+      ? Math.round(
+          (timingMetrics.slice(1).reduce((sum, m) => sum + m.renderDeltaMs, 0) /
+            (timingMetrics.length - 1)) *
+            10
+        ) / 10
+      : 0;
   const maxObservedBacklog = timingMetrics.reduce((max, m) => Math.max(max, m.queueBacklog), 0);
 
   // Status badge config
-  const statusBadges: Record<StreamStatus, { label: string; bg: string; text: string; border: string; pulse?: boolean }> = {
+  const statusBadges: Record<
+    StreamStatus,
+    { label: string; bg: string; text: string; border: string; pulse?: boolean }
+  > = {
     idle: { label: '空闲就绪', bg: 'bg-slate-800', text: 'text-slate-300', border: 'border-slate-700' },
-    creating_session: { label: 'Prefill 会话初始化中...', bg: 'bg-indigo-950', text: 'text-indigo-300', border: 'border-indigo-800', pulse: true },
-    connecting: { label: 'WebSocket 连接握手中...', bg: 'bg-sky-950', text: 'text-sky-300', border: 'border-sky-800', pulse: true },
-    streaming: { label: '自回归流式生成中', bg: 'bg-emerald-950', text: 'text-emerald-300', border: 'border-emerald-700', pulse: true },
+    creating_session: {
+      label: 'Prefill 会话初始化中...',
+      bg: 'bg-indigo-950',
+      text: 'text-indigo-300',
+      border: 'border-indigo-800',
+      pulse: true,
+    },
+    connecting: {
+      label: 'WebSocket 连接握手中...',
+      bg: 'bg-sky-950',
+      text: 'text-sky-300',
+      border: 'border-sky-800',
+      pulse: true,
+    },
+    streaming: {
+      label: '自回归流式生成中',
+      bg: 'bg-emerald-950',
+      text: 'text-emerald-300',
+      border: 'border-emerald-700',
+      pulse: true,
+    },
     finished: { label: '流式生成已完成', bg: 'bg-blue-950', text: 'text-blue-300', border: 'border-blue-800' },
     stopped: { label: '已手动中止', bg: 'bg-amber-950', text: 'text-amber-300', border: 'border-amber-800' },
     error: { label: '生成异常中断', bg: 'bg-rose-950', text: 'text-rose-300', border: 'border-rose-800' },
@@ -323,11 +416,11 @@ export function App() {
             <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
               LLM 可解释性交互工坊
               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                P0-Step3: WebSocket 流式推流 + 渲染队列
+                P0-Step4: 双层 Canvas 动态生长热力图
               </span>
             </h1>
             <p className="text-[11px] text-slate-400">
-              KV Cache 增量推理 • rAF 节流消费队列 • 状态友好提示
+              离屏缓冲逐行增量绘制 • 60 FPS 平滑渲染 • Log-scale 色谱映射
             </p>
           </div>
         </div>
@@ -457,8 +550,12 @@ export function App() {
         {/* AI Response Status Banner */}
         <section className="bg-slate-900/80 rounded-xl border border-slate-800 p-4 shadow-lg flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-3">
-            <div className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-2 ${activeBadge.bg} ${activeBadge.text} ${activeBadge.border}`}>
-              <div className={`w-2 h-2 rounded-full ${activeBadge.pulse ? 'bg-current animate-ping' : 'bg-current'}`} />
+            <div
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-2 ${activeBadge.bg} ${activeBadge.text} ${activeBadge.border}`}
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${activeBadge.pulse ? 'bg-current animate-ping' : 'bg-current'}`}
+              />
               <span>{activeBadge.label}</span>
             </div>
 
@@ -476,18 +573,24 @@ export function App() {
             <div className="text-xs flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 rounded-lg border border-slate-800">
               <Gauge className="w-3.5 h-3.5 text-indigo-400" />
               <span className="text-slate-400">队列积压:</span>
-              <span className={`font-mono font-bold ${queueBacklog > 5 ? 'text-amber-400 animate-pulse' : 'text-slate-200'}`}>
+              <span
+                className={`font-mono font-bold ${
+                  queueBacklog > 5 ? 'text-amber-400 animate-pulse' : 'text-slate-200'
+                }`}
+              >
                 {queueBacklog}
               </span>
               <span className="text-slate-500 text-[11px]">tokens</span>
             </div>
 
             {/* Adaptive Pace Mode Badge */}
-            <div className={`text-[11px] font-mono px-2.5 py-1 rounded-md border ${
-              queueBacklog > 5
-                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                : 'bg-slate-800 text-slate-400 border-slate-700'
-            }`}>
+            <div
+              className={`text-[11px] font-mono px-2.5 py-1 rounded-md border ${
+                queueBacklog > 5
+                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
               {queueBacklog > 5 ? '⚡ 追帧调速中 (15ms)' : '平稳调速 (~40ms)'}
             </div>
           </div>
@@ -525,16 +628,24 @@ export function App() {
                 <span>流式渲染队列测速指标 (SmoothRenderPipeline Telemetry)</span>
               </span>
               <div className="flex items-center gap-4 font-mono text-[11px]">
-                <span>平均到达间隔: <b className="text-emerald-400">{avgArrivalDelta}ms</b></span>
-                <span>平均消费间隔: <b className="text-sky-400">{avgRenderDelta}ms</b></span>
-                <span>峰值队列积压: <b className="text-amber-400">{maxObservedBacklog}</b></span>
+                <span>
+                  平均到达间隔: <b className="text-emerald-400">{avgArrivalDelta}ms</b>
+                </span>
+                <span>
+                  平均消费间隔: <b className="text-sky-400">{avgRenderDelta}ms</b>
+                </span>
+                <span>
+                  峰值队列积压: <b className="text-amber-400">{maxObservedBacklog}</b>
+                </span>
               </div>
             </div>
 
             {/* Timing Table */}
             <div className="max-h-48 overflow-y-auto font-mono text-[11px] border border-slate-800/80 rounded bg-slate-950 p-2">
               {timingMetrics.length === 0 ? (
-                <div className="text-slate-600 text-center py-4">暂无测速记录，启动流式生成后将记录每步 token 时间间隔...</div>
+                <div className="text-slate-600 text-center py-4">
+                  暂无测速记录，启动流式生成后将记录每步 token 时间间隔...
+                </div>
               ) : (
                 <table className="w-full text-left">
                   <thead>
@@ -543,7 +654,7 @@ export function App() {
                       <th className="py-1 px-2">Token</th>
                       <th className="py-1 px-2">到达间隔 (Δt Arrive)</th>
                       <th className="py-1 px-2">渲染间隔 (Δt Render)</th>
-                      <th className="py-1 px-2">消费时队列积压</th>
+                      <th className="py-1 px-2">消费时积压</th>
                       <th className="py-1 px-2">生效调度策略</th>
                     </tr>
                   </thead>
@@ -557,7 +668,13 @@ export function App() {
                         <td className="py-0.5 px-2 text-emerald-400">{m.arrivalDeltaMs} ms</td>
                         <td className="py-0.5 px-2 text-sky-400">{m.renderDeltaMs} ms</td>
                         <td className="py-0.5 px-2">
-                          <span className={`px-1 rounded ${m.queueBacklog > 5 ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-slate-400'}`}>
+                          <span
+                            className={`px-1 rounded ${
+                              m.queueBacklog > 5
+                                ? 'bg-amber-500/20 text-amber-300 font-bold'
+                                : 'text-slate-400'
+                            }`}
+                          >
                             {m.queueBacklog}
                           </span>
                         </td>
@@ -584,22 +701,18 @@ export function App() {
               <Activity className="w-4 h-4 text-emerald-400" />
               <span>自回归增量生成文本 (Live Token Stream):</span>
             </span>
-            <span className="font-mono text-[11px] text-slate-500">
-              已生成 {currentStep} tokens
-            </span>
+            <span className="font-mono text-[11px] text-slate-500">已生成 {currentStep} tokens</span>
           </div>
 
           <div className="bg-slate-950 rounded-lg p-4 font-mono text-sm leading-relaxed border border-slate-800 min-h-[90px] max-h-56 overflow-y-auto">
             <span className="text-slate-500">{prompt}</span>
-            <span className="text-emerald-300 font-semibold ml-1">
-              {generatedText}
-            </span>
+            <span className="text-emerald-300 font-semibold ml-1">{generatedText}</span>
             {isStreaming && (
               <span className="inline-block w-2 h-4 bg-emerald-400 ml-1 animate-pulse align-middle" />
             )}
             {!generatedText && !isStreaming && (
               <span className="text-slate-600 text-xs italic ml-2">
-                (点击"流式生成 (WS)"体验自回归增量生成与队列平滑渲染...)
+                (点击"流式生成 (WS)"体验自回归增量生成与双层 Canvas 动态热力图...)
               </span>
             )}
             <div ref={textEndRef} />
@@ -608,24 +721,18 @@ export function App() {
 
         {/* Two Columns: Visualizer and Controls */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left 2 Cols: Attention Heatmap Area */}
+          {/* Left 2 Cols: Dual-Canvas Incremental Attention Heatmap */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Note banner explaining current stage separation */}
-            <div className="p-3 bg-indigo-950/40 border border-indigo-800/50 rounded-lg text-xs text-indigo-200 flex items-start gap-2">
-              <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-semibold">P0-Step3 验证阶段说明：</span>
-                当前优先验证 WebSocket 自回归推流、rAF 平顺渲染队列与测速数据（无卡顿、自适应追帧）。
-                确认队列节奏平顺后，我们将无缝接入 Canvas 热力图逐行动态生长！
-              </div>
-            </div>
-
-            {inspectData ? (
+            {heatmapMatrix ? (
               <AttentionHeatmap
-                matrix={inspectData.attention.matrix}
-                tokens={inspectData.attention.tokens}
-                layer={inspectData.attention.layer}
-                head={inspectData.attention.head}
+                matrix={heatmapMatrix}
+                tokens={heatmapTokens}
+                layer={currentLayer}
+                head={currentHead}
+                incrementalRow={incrementalRow}
+                isStreaming={isStreaming}
+                isLoading={heatmapLoading}
+                loadingMessage={heatmapLoadingMessage}
               />
             ) : (
               <div className="h-96 rounded-xl border border-dashed border-slate-800 flex flex-col items-center justify-center text-slate-500 space-y-3 p-6 text-center">
@@ -635,7 +742,7 @@ export function App() {
                 <div>
                   <p className="text-sm text-slate-300 font-medium">Attention 热力图就绪</p>
                   <p className="text-xs text-slate-500 mt-1">
-                    支持单步 Hook 拦截矩阵呈现。动态逐行生长 Canvas 将在当前流式队列节奏确认后接入。
+                    点击"流式生成 (WS)"或"单步 Hook 分析"，Canvas 将实时展现自回归注意力矩阵！
                   </p>
                 </div>
               </div>
@@ -657,19 +764,14 @@ export function App() {
               onTopKChange={setTopK}
               fullAttnLayers={modelMeta?.full_attn_layers}
               disabled={isStreaming || singleLoading}
+              isStreaming={isStreaming}
             />
 
             {/* Show Top-K Candidates from either live stream or single step */}
             {streamTopK.length > 0 && streamNextToken ? (
-              <TopKBarChart
-                candidates={streamTopK}
-                nextToken={streamNextToken}
-              />
+              <TopKBarChart candidates={streamTopK} nextToken={streamNextToken} />
             ) : inspectData ? (
-              <TopKBarChart
-                candidates={inspectData.top_k_candidates}
-                nextToken={inspectData.next_token}
-              />
+              <TopKBarChart candidates={inspectData.top_k_candidates} nextToken={inspectData.next_token} />
             ) : null}
           </div>
         </section>

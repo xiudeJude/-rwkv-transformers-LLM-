@@ -1,4 +1,5 @@
 import React from 'react';
+import { Lock } from 'lucide-react';
 
 interface LayerHeadSelectorProps {
   numLayers: number;
@@ -13,6 +14,7 @@ interface LayerHeadSelectorProps {
   onTopKChange: (k: number) => void;
   fullAttnLayers?: number[];
   disabled?: boolean;
+  isStreaming?: boolean;
 }
 
 export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
@@ -28,6 +30,7 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
   onTopKChange,
   fullAttnLayers = [],
   disabled = false,
+  isStreaming = false,
 }) => {
   const isHybrid = fullAttnLayers.length > 0 && fullAttnLayers.length < numLayers;
   const isFullAttn = !isHybrid || fullAttnLayers.includes(currentLayer);
@@ -46,6 +49,15 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
           </span>
         )}
       </h3>
+
+      {/* Locked notice during active generation */}
+      {disabled && isStreaming && (
+        <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300 flex items-center gap-2 animate-pulse">
+          <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>生成中已锁定观察 Layer {currentLayer} / Head {currentHead}，完成后可切换查看其他层</span>
+        </div>
+      )}
+
 
       {/* Layer selector slider & buttons */}
       <div>

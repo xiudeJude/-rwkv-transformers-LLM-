@@ -1,7 +1,16 @@
-// Scientific colormaps for attention matrices: Viridis and Plasma
-export function getViridisColor(val: number): [number, number, number] {
+// Log-scale mapping for attention weights, keeping long tail weak values clearly discernible
+export function toLogScale(val: number, c: number = 99): number {
+  if (val <= 0) return 0;
+  return Math.log10(1 + c * Math.min(Math.max(val, 0), 1)) / Math.log10(1 + c);
+}
+
+// Scientific colormaps for attention matrices: Viridis
+export function getViridisColor(val: number, useLogScale: boolean = true): [number, number, number] {
+  // Apply log-scale transform if enabled
+  const scaled = useLogScale ? toLogScale(val) : val;
   // Clamp to [0, 1]
-  const t = Math.max(0, Math.min(1, val));
+  const t = Math.max(0, Math.min(1, scaled));
+
   
   // High quality 5-point Viridis approximation
   // 0.0: #440154 (68, 1, 84)

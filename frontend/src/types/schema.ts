@@ -48,10 +48,12 @@ export interface TokenStepPayload {
   token_id: number;
   token_prob: number;
   topk_candidates: TokenCandidate[];
+  attention_row?: number[];
   is_finished: boolean;
   finish_reason?: string;
   message?: string;
 }
+
 
 export interface SessionAttentionResponse {
   status: string;
