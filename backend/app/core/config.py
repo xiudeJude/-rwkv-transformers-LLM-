@@ -58,6 +58,16 @@ class Settings:
         ]
 
     @property
+    def SESSION_TTL_SECONDS(self) -> int:
+        """会话超时存活时间 (秒)，默认 1800 秒 (30 分钟)"""
+        return int(os.getenv("SESSION_TTL_SECONDS", "1800"))
+
+    @property
+    def MAX_SESSIONS(self) -> int:
+        """最大活跃会话数上限，超限时触发 LRU 淘汰并释放 GPU 显存，默认 10"""
+        return int(os.getenv("MAX_SESSIONS", "10"))
+
+    @property
     def DEVICE(self) -> str:
         override = os.getenv("DEVICE", "")
         if override:

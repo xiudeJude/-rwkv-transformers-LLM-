@@ -88,7 +88,7 @@ async def create_session(req: CreateSessionRequest):
 async def session_step(session_id: str, req: StepRequest):
     session = session_manager.get_session(session_id)
     if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found or expired")
     try:
         step_result = session.step(
             temperature=req.temperature,
@@ -109,7 +109,7 @@ async def session_step(session_id: str, req: StepRequest):
 async def close_session(session_id: str):
     success = session_manager.close_session(session_id)
     if not success:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found or expired")
     return {"status": "closed", "session_id": session_id}
 
 @router.get("/api/session/{session_id}/attention")
@@ -121,7 +121,7 @@ async def get_session_attention(
 ):
     session = session_manager.get_session(session_id)
     if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found or expired")
     try:
         detail = session.get_attention_detail(step=step, layer=layer, head=head)
         return {
@@ -289,7 +289,7 @@ async def create_rwkv_session(req: CreateSessionRequest):
 async def session_rwkv_step(session_id: str, req: StepRequest):
     session = rwkv_session_manager.get_session(session_id)
     if not session:
-        raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found")
+        raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found or expired")
     try:
         step_result = session.step(
             temperature=req.temperature,
@@ -309,7 +309,7 @@ async def session_rwkv_step(session_id: str, req: StepRequest):
 async def close_rwkv_session(session_id: str):
     success = rwkv_session_manager.close_session(session_id)
     if not success:
-        raise HTTPException(status_code=404, detail="RWKV Session not found")
+        raise HTTPException(status_code=404, detail="RWKV Session not found or expired")
     return {"status": "closed", "session_id": session_id}
 
 @router.get("/api/session/{session_id}/rwkv_state")
@@ -322,7 +322,7 @@ async def get_session_rwkv_state(
 ):
     session = rwkv_session_manager.get_session(session_id)
     if not session:
-        raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found")
+        raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found or expired")
     try:
         detail = session.get_rwkv_state(step=step, layer=layer, head=head)
         payload = {"status": "success", **detail}

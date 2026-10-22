@@ -1,9 +1,11 @@
 import uuid
 import time
+import threading
 from typing import Dict, Any, List, Optional
 import torch
 
 from .rwkv_engine import RWKVEngine
+from ..core.config import settings
 
 class RWKVSession:
     """Manages the lifecycle of an incremental inference session for RWKV-7 models."""
@@ -22,6 +24,7 @@ class RWKVSession:
         self.step_count: int = 0
         self.is_finished: bool = False
         self.created_at: float = time.time()
+        self.last_accessed_at: float = self.created_at
 
     def _compute_layer_summary(self, state: List[torch.Tensor], layer: int) -> List[float]:
         """Computes the 16-dimensional Frobenius norm summary vector for the specified layer's state matrix."""
@@ -36,6 +39,7 @@ class RWKVSession:
 
     def prefill(self, prompt: str, target_layer: int = 0) -> Dict[str, Any]:
         """Runs the initial prefill stage on the complete prompt, initializing RWKV state."""
+        self.last_accessed_at = time.time()
         if self.engine.model is None or self.engine.pipeline is None:
             raise RuntimeError("Model is not loaded in RWKVEngine.")
 
@@ -85,6 +89,7 @@ class RWKVSession:
         target_layer: int = 0
     ) -> Dict[str, Any]:
         """Executes a single decode step in the RWKV autoregressive cycle."""
+        self.last_accessed_at = time.time()
         if self.is_finished:
             return {
                 "step": self.step_count,
@@ -185,6 +190,7 @@ class RWKVSession:
 
     def get_rwkv_state(self, step: Optional[int] = None, layer: int = 0, head: Optional[int] = None) -> Dict[str, Any]:
         """Level 2 On-demand pull: returns the state matrix for the specified step, layer, and optional head."""
+        self.last_accessed_at = time.time()
         if not self.history_states:
             raise RuntimeError("Session has no state history. Run prefill() first.")
 
@@ -233,30 +239,79 @@ class RWKVSession:
 
 
 class RWKVSessionManager:
-    """Thread-safe registry managing active RWKVSessions."""
+    """Thread-safe registry managing active RWKVSessions with TTL and LRU capacity eviction."""
 
-    def __init__(self):
+    def __init__(self, ttl_seconds: Optional[int] = None, max_sessions: Optional[int] = None):
         self._sessions: Dict[str, RWKVSession] = {}
+        self._lock = threading.Lock()
+        self.ttl_seconds = ttl_seconds if ttl_seconds is not None else settings.SESSION_TTL_SECONDS
+        self.max_sessions = max_sessions if max_sessions is not None else settings.MAX_SESSIONS
+
+    def _cleanup_expired_locked(self, now: float):
+        """Evicts sessions that have exceeded the TTL limit."""
+        expired_ids = [
+            sid for sid, s in self._sessions.items()
+            if (now - s.last_accessed_at) > self.ttl_seconds
+        ]
+        for sid in expired_ids:
+            sess = self._sessions.pop(sid, None)
+            if sess:
+                sess.close()
+
+    def _evict_lru_locked(self, max_allowed: int):
+        """Evicts the least recently accessed sessions when the session count exceeds max_allowed."""
+        if len(self._sessions) > max_allowed:
+            sorted_sessions = sorted(self._sessions.items(), key=lambda item: item[1].last_accessed_at)
+            num_to_evict = len(self._sessions) - max_allowed
+            for sid, sess in sorted_sessions[:num_to_evict]:
+                self._sessions.pop(sid, None)
+                sess.close()
 
     def create_session(self, engine: RWKVEngine) -> RWKVSession:
-        session_id = uuid.uuid4().hex[:12]
-        session = RWKVSession(session_id, engine)
-        self._sessions[session_id] = session
-        return session
+        now = time.time()
+        with self._lock:
+            # 1. Clean up expired sessions first
+            self._cleanup_expired_locked(now)
+            # 2. Evict LRU session if capacity limit is reached
+            if len(self._sessions) >= self.max_sessions:
+                self._evict_lru_locked(self.max_sessions - 1)
+
+            session_id = uuid.uuid4().hex[:12]
+            session = RWKVSession(session_id, engine)
+            session.last_accessed_at = now
+            self._sessions[session_id] = session
+            return session
 
     def get_session(self, session_id: str) -> Optional[RWKVSession]:
-        return self._sessions.get(session_id)
+        now = time.time()
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            if (now - session.last_accessed_at) > self.ttl_seconds:
+                self._sessions.pop(session_id, None)
+                session.close()
+                return None
+            session.last_accessed_at = now
+            return session
 
     def close_session(self, session_id: str) -> bool:
-        session = self._sessions.pop(session_id, None)
-        if session is not None:
-            session.close()
-            return True
-        return False
+        with self._lock:
+            session = self._sessions.pop(session_id, None)
+            if session is not None:
+                session.close()
+                return True
+            return False
 
     def close_all(self):
-        for session in self._sessions.values():
-            session.close()
-        self._sessions.clear()
+        with self._lock:
+            for session in self._sessions.values():
+                session.close()
+            self._sessions.clear()
+
+    @property
+    def active_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
 
 rwkv_session_manager = RWKVSessionManager()
