@@ -45,6 +45,19 @@ class Settings:
     HF_ENDPOINT: str = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
     
     @property
+    def CORS_ORIGINS(self) -> list[str]:
+        """允许跨域的 Origin 列表，支持逗号分隔环境变量 CORS_ORIGINS 配置"""
+        raw = os.getenv("CORS_ORIGINS", "")
+        if raw.strip():
+            return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        return [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+
+    @property
     def DEVICE(self) -> str:
         override = os.getenv("DEVICE", "")
         if override:
