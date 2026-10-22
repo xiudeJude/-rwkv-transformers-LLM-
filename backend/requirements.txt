@@ -1,13 +1,30 @@
+# ==============================================================================
+# LLM Interpretability Workshop - Backend Requirements
+# ==============================================================================
+
+# PyTorch deep learning framework
+# Note: Install torch matching your CUDA runtime from pytorch.org:
+# e.g. (CUDA 12.4): pip install torch --index-url https://download.pytorch.org/whl/cu124
+# e.g. (CPU debug): pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2.0
+
+# Web service & asynchronous communication
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+websockets>=13.0
+httpx>=0.27.0
+orjson>=3.10.0
 pydantic>=2.8.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Transformer & GGUF model support
 transformers>=4.45.0
 accelerate>=0.34.0
 sentencepiece>=0.2.0
-websockets>=13.0
-numpy>=1.26.0
-python-dotenv>=1.0.1
-requests>=2.32.0
 huggingface_hub>=0.24.0
-orjson>=3.10.0
-rwkv>=0.8.32
+gguf>=0.10.0
+
+# RWKV inference engine & numerical computing
+rwkv>=0.8.26
+numpy>=1.26.0
