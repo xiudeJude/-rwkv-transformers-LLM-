@@ -220,7 +220,15 @@ curl -s "http://127.0.0.1:8000/api/model/info?model_type=rwkv"
 ### 关于选择 GGUF Q8_0 量化版本的说明及精度评估
 在 Transformer 部分，本项目选用 `Qwen3.5-0.8B-Q8_0.gguf` 权重而非原始 bfloat16 safetensors，主要考量如下：
 1. **显存与存储轻量化**：Q8_0 相比原始 bf16 将模型体积与显存占用减少约 50%（~800MB vs ~1.7GB），保障在 8GB 消费级显卡（如 RTX 4060）与本地多模型并排对比时的充裕显存空间；
-2. **Attention 权重精度评估**：GGUF Q8_0 属于极高保真度整型量化（每个 Block 具有独立浮点缩放因子），在前向推理阶段经由反量化后以 `bfloat16` 精度执行 $QK^\top$ 点积与 Softmax 计算，实测其 Attention 矩阵相对未量化基准的 KL 散度极小（$\approx 0$），且因果下三角稀疏度与相对排序完全保持无损，完全满足可解释性微观观测要求。
+2. **Attention 权重保真度分析**：GGUF Q8_0 采用分块整型量化（Block Size 为 32，每块具有独立浮点缩放因子）。在前向推理时权重被即时反量化，以 `bfloat16`/`float32` 精度执行 $QK^\top$ 点积与 Softmax 计算。理论分析与学术基准表明，Q8_0 对注意力矩阵的秩排序与因果下三角结构具备极高保真度，相对全精度基准的 KL 散度预期趋近于 0，完全满足可解释性微观观测需求；
+3. **真实环境对比复现指南**：为保证项目开箱即用与体积轻量，仓库默认仅配置量化模型，未预装 1.7GB 的未量化全量权重。若需执行严格的双模型实测对比，可运行仓库提供的测量脚本复现：
+   ```bash
+   # 步骤 1: 下载官方未量化 safetensors 权重 (~1.7GB)
+   huggingface-cli download Qwen/Qwen3.5-0.8B --local-dir backend/models/Qwen3.5-0.8B
+
+   # 步骤 2: 运行逐层 Attention 矩阵与 Logits 的 KL 散度测量脚本
+   python backend/tests/measure_kl_divergence.py --unquantized-path backend/models/Qwen3.5-0.8B --device cuda
+   ```
 
 ### 模型架构规格（实测）
 - **Transformer 模型**：`Qwen3.5-0.8B`
