@@ -6,12 +6,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from app.core.config import settings
 
 def inspect_hybrid_attentions():
     print("=" * 70)
     print("【Qwen3.5 混合架构 outputs.attentions 结构专项实测】")
     
-    model_path = "D:/rwkv/models/unsloth/Qwen3.5-0.8B-GGUF"
+    model_path = settings.DEFAULT_TRANSFORMER
     gguf_file = "Qwen3.5-0.8B-Q8_0.gguf"
     
     print(f"Loading {model_path} ({gguf_file})...")

@@ -25,12 +25,24 @@ share/python-wheels/
 venv/
 ENV/
 
+# Environment files
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
 # PyTorch models & cache
 *.pt
 *.bin
 *.safetensors
 *.pth
-models/cache/
+*.gguf
+backend/models/*
+!backend/models/.gitkeep
+/models/
+/models/cache/
 .cache/
 
 # Node / Vite
