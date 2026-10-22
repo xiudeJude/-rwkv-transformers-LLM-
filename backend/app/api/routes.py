@@ -193,13 +193,17 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
                 print(f"[WebSocket] Stop/disconnect signal detected for session {session_id}")
                 break
 
-            step_res = session.step(
+            step_res = await asyncio.to_thread(
+                session.step,
                 temperature=temperature,
                 top_k=top_k,
                 repetition_penalty=repetition_penalty,
                 target_layer=target_layer,
                 target_head=target_head
             )
+            if stop_event.is_set():
+                print(f"[WebSocket] Stop signal processed after step for session {session_id}")
+                break
             tokens_generated += 1
 
             # Level 1 lightweight message with single-row attention slice
@@ -254,6 +258,10 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
             listener_task.cancel()
         print(f"[WebSocket] Releasing session {session_id} and freeing GPU VRAM.")
         session_manager.close_session(session_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ==========================================
@@ -379,12 +387,16 @@ async def session_rwkv_websocket_stream(websocket: WebSocket, session_id: str):
                 print(f"[WebSocket RWKV] Stop/disconnect signal detected for session {session_id}")
                 break
 
-            step_res = session.step(
+            step_res = await asyncio.to_thread(
+                session.step,
                 temperature=temperature,
                 top_k=top_k,
                 repetition_penalty=repetition_penalty,
                 target_layer=target_layer
             )
+            if stop_event.is_set():
+                print(f"[WebSocket RWKV] Stop signal processed after step for session {session_id}")
+                break
             tokens_generated += 1
 
             level1_payload = {
@@ -439,5 +451,9 @@ async def session_rwkv_websocket_stream(websocket: WebSocket, session_id: str):
             listener_task.cancel()
         print(f"[WebSocket RWKV] Releasing session {session_id} and freeing GPU VRAM.")
         rwkv_session_manager.close_session(session_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
