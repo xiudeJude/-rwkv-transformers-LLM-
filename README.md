@@ -6,7 +6,7 @@
 
 ## 📸 功能展示与架构全景
 
-### 1. 核心功能视区（效果演示占位）
+### 1. 核心功能视区
 
 | 视图模块 | 观测范式 | 核心呈现特征 |
 | :--- | :--- | :--- |
@@ -14,12 +14,14 @@
 | **RWKV-7 隐状态演化瀑布图** | 循环隐状态衰减与注能 | 左右双色带对称对照：色带 A（Viridis 绝对模长）+ 色带 B（Coolwarm $\mathbf{\Delta}_t$ 扰动差分），分层独立定标 |
 | **Level 2 状态探针模态窗** | 微观权重矩阵下钻 | 点击任意历史步，以 < 10ms 延迟回溯单头 $64 \times 64$ 原始隐状态张量，查看 4,096 个权重热力分布 |
 
-```
-<!-- 截图占位：可在完成本地部署后将截取的实际界面图片替换于此 -->
-[界面截图占位 1: Transformer 全局因果注意力热力图与增量行实时流]
-[界面截图占位 2: RWKV-7 隐状态模长与差分双色带瀑布流同屏对照]
-[界面截图占位 3: Level 2 单头 64x64 矩阵微观下钻探针模态窗]
-```
+![Transformer 因果注意力热力图](docs/screenshots/01-transformer-attention.png)
+*Transformer 视图：50 步 Decode 增量热力图，第 3 层第 0 头，Log-scale 色标*
+
+![RWKV-7 隐状态瀑布图](docs/screenshots/02-rwkv-waterfall.png)
+*RWKV 视图：51 步左右双色带同屏，左为状态模长（Viridis），右为单步差分（Coolwarm）*
+
+![Level 2 状态探针](docs/screenshots/03-level2-probe.png)
+*Level 2 探针：单头 64×64 原始 WKV 状态矩阵，4,096 个权重点*
 
 ### 2. 双引擎双通道数据流架构
 
