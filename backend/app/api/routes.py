@@ -108,9 +108,10 @@ async def session_step(session_id: str, req: StepRequest):
 @router.post("/api/session/{session_id}/close")
 async def close_session(session_id: str):
     success = session_manager.close_session(session_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Session not found or expired")
-    return {"status": "closed", "session_id": session_id}
+    # Idempotent by design: the WebSocket handler already releases the session on
+    # disconnect, so a follow-up HTTP close from the frontend would otherwise 404.
+    # Returning 200 keeps the client cleanup path silent and safe to retry.
+    return {"status": "closed", "session_id": session_id, "already_closed": not success}
 
 @router.get("/api/session/{session_id}/attention")
 async def get_session_attention(
@@ -308,9 +309,8 @@ async def session_rwkv_step(session_id: str, req: StepRequest):
 @router.post("/api/rwkv/session/{session_id}/close")
 async def close_rwkv_session(session_id: str):
     success = rwkv_session_manager.close_session(session_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="RWKV Session not found or expired")
-    return {"status": "closed", "session_id": session_id}
+    # Same idempotency contract as the Transformer close endpoint.
+    return {"status": "closed", "session_id": session_id, "already_closed": not success}
 
 @router.get("/api/session/{session_id}/rwkv_state")
 @router.get("/api/rwkv/session/{session_id}/state")

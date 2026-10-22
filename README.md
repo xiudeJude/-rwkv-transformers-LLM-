@@ -265,6 +265,20 @@ curl -s "http://127.0.0.1:8000/api/model/info?model_type=rwkv"
 * **表现**：`huggingface-cli` 提示 `Connection timed out`。
 * **解决**：配置镜像源加速环境变量 `HF_ENDPOINT=https://hf-mirror.com`，或通过网盘/浏览器直接从镜像站下载后放入 `backend/models/` 目录。
 
+### 4. 生成速度偏慢（可选加速）
+* **表现**：启动日志出现 `causal_conv1d is not installed`、`flash-linear-attention is not installed`，decode 每步耗时高于预期。
+* **原因**：Qwen3.5 的 18 个 Gated DeltaNet 层在缺少融合内核时会回退到参考 PyTorch 实现，结果正确但速度较慢。
+* **解决**（可选，不影响正确性）：
+  ```bash
+  pip install causal-conv1d flash-linear-attention
+  ```
+  安装后重启后端即可启用融合内核。若编译失败（需要匹配的 CUDA 工具链），保持默认回退实现也能完整运行全部功能。
+
+### 5. 切换架构 Tab 时控制台出现 404
+* **表现**：旧版本在 Transformer/RWKV 切换时，`POST /close` 返回 404。
+* **原因**：WebSocket 断开时已释放会话，前端随后补发的 HTTP close 找不到会话。
+* **状态**：已修复（commit `fix(session): make close endpoint idempotent`），`/close` 现在幂等返回 200 与 `already_closed: true`。
+
 ---
 
 ## 🤝 复现性声明与 AI 协同开发说明
