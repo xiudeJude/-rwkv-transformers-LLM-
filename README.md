@@ -284,7 +284,7 @@ curl -s "http://127.0.0.1:8000/api/model/info?model_type=rwkv"
 ### 3. 演进链路与证据
 
 - **AI 对话历史**：23 轮 / 1163 次工具调用，时间跨度 2026-09-20 — 2026-10-22
-- **Git 提交**：23 次细粒度提交，初始提交仅含 LICENSE，无一次性堆码
+- **Git 提交**：22 次功能提交 + 文档补充，初始提交仅含 LICENSE，无一次性堆码
 - **提交 ↔ 对话映射**：见技术文档第 6.3 节
 - **核心 Prompt 链**：KV-Cache 增量推理、Level 2 78ms→8ms、瀑布图渲染 Bug 修复
 - **截图可复现**：`frontend/scripts/capture_screenshots.mjs` 可一键重拍本页三张图
