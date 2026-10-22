@@ -30,7 +30,18 @@ import type {
   SessionAttentionResponse
 } from './types/schema';
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
+
+const getWsUrl = (wsEndpoint: string) => {
+  if (import.meta.env.VITE_WS_BASE) {
+    return `${import.meta.env.VITE_WS_BASE}${wsEndpoint}`;
+  }
+  if (import.meta.env.VITE_API_BASE) {
+    const wsPrefix = import.meta.env.VITE_API_BASE.replace(/^http/, 'ws');
+    return `${wsPrefix}${wsEndpoint}`;
+  }
+  return `ws://127.0.0.1:8000${wsEndpoint}`;
+};
 
 type StreamStatus = 'idle' | 'creating_session' | 'connecting' | 'streaming' | 'finished' | 'stopped' | 'error';
 
@@ -402,7 +413,7 @@ export function App() {
         modelArch === 'transformer'
           ? `/ws/session/${sessionId}/stream`
           : `/ws/rwkv/session/${sessionId}/stream`;
-      const wsUrl = `ws://127.0.0.1:8000${wsEndpoint}`;
+      const wsUrl = getWsUrl(wsEndpoint);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
