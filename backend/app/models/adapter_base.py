@@ -200,3 +200,7 @@ class ModelAdapter(ABC):
     @abstractmethod
     def close_state(self, state: Any) -> None:
         """释放单个会话状态占用的资源。"""
+
+    def cache_metrics(self, state: Any) -> Dict[str, Any]:
+        """概念实验室用的轻量缓存拆分；默认实现要求适配器覆盖。"""
+        raise NotImplementedError(f"{type(self).__name__} does not implement cache_metrics()")

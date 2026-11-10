@@ -21,6 +21,7 @@ class Settings:
     _DEFAULT_TRANSFORMER_PATH = os.path.join(BACKEND_DIR, "models", "Qwen3.5-0.8B-GGUF")
     _DEFAULT_RWKV_PATH = os.path.join(BACKEND_DIR, "models", "rwkv7-g1d-0.4b-20260210-ctx8192.pth")
     _DEFAULT_MAMBA_PATH = "state-spaces/mamba-130m-hf"
+    _DEFAULT_ATTENTION_BASELINE_PATH = "Qwen/Qwen2.5-0.5B"
 
     @property
     def DEFAULT_TRANSFORMER(self) -> str:
@@ -46,6 +47,16 @@ class Settings:
     def DEFAULT_MAMBA(self) -> str:
         """Mamba 权重路径；默认使用 Hugging Face 模型 ID，也支持本地目录。"""
         path = os.getenv("DEFAULT_MAMBA", self._DEFAULT_MAMBA_PATH)
+        if not os.path.isabs(path) and not path.startswith("http"):
+            resolved = os.path.abspath(os.path.join(BACKEND_DIR, path))
+            if os.path.exists(resolved):
+                return resolved
+        return path
+
+    @property
+    def DEFAULT_ATTENTION_BASELINE(self) -> str:
+        """纯注意力对照模型路径；默认使用 Hugging Face 模型 ID，也支持本地目录。"""
+        path = os.getenv("DEFAULT_ATTENTION_BASELINE", self._DEFAULT_ATTENTION_BASELINE_PATH)
         if not os.path.isabs(path) and not path.startswith("http"):
             resolved = os.path.abspath(os.path.join(BACKEND_DIR, path))
             if os.path.exists(resolved):
@@ -92,6 +103,11 @@ class Settings:
     def MAMBA_MODEL_TYPE(self) -> str:
         """Mamba 侧模型适配器类型名，注册表据此创建 Mamba 侧引擎。"""
         return os.getenv("MAMBA_MODEL_TYPE", "mamba")
+
+    @property
+    def ATTENTION_BASELINE_MODEL_TYPE(self) -> str:
+        """纯注意力对照适配器类型名。"""
+        return os.getenv("ATTENTION_BASELINE_MODEL_TYPE", "attention_baseline")
 
     @property
     def DEVICE(self) -> str:

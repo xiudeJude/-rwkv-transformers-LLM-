@@ -59,6 +59,8 @@ class TransformerAdapterState:
 class TransformerAdapter(ModelAdapter):
     """Transformer 因果模型的统一适配器，使用 PyTorch forward hook 提取注意力。"""
 
+    model_type = "transformer"
+
     def __init__(self):
         super().__init__()
         self.hook_manager = HookManager()
@@ -127,7 +129,7 @@ class TransformerAdapter(ModelAdapter):
     def get_metadata(self) -> ModelMetadata:
         return ModelMetadata(
             model_id=self.model_id,
-            model_type="transformer",
+            model_type=self.model_type,
             num_layers=self.num_layers,
             num_heads=self.num_heads,
             hidden_size=self.hidden_size,
@@ -160,16 +162,33 @@ class TransformerAdapter(ModelAdapter):
     def create_state(self) -> TransformerAdapterState:
         return TransformerAdapterState()
 
-    def prefill(self, state: TransformerAdapterState, prompt: str, target_layer: int = 3, target_head: int = 0) -> Dict[str, Any]:
-        """Runs the initial prefill stage on the complete prompt, initializing past_key_values."""
+    def prefill(
+        self,
+        state: TransformerAdapterState,
+        prompt: str,
+        target_layer: int = 3,
+        target_head: int = 0,
+        prompt_token_ids: Optional[List[int]] = None,
+        capture_attention: bool = True,
+    ) -> Dict[str, Any]:
+        """Runs the initial prefill stage on the complete prompt, initializing past_key_values.
+
+        `prompt_token_ids` 与 `capture_attention=False` 供概念实验室做精确长度、
+        只关心缓存字节数的测量；默认调用路径的行为保持不变。
+        """
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model is not loaded in TransformerEngine.")
 
         # 1. Tokenize input prompt
-        tokenized = self.tokenize(prompt)
-        input_ids = tokenized["input_ids"].to(self.device)
-        state.token_ids = tokenized["token_ids"]
-        state.tokens = tokenized["tokens"]
+        if prompt_token_ids is None:
+            tokenized = self.tokenize(prompt)
+            input_ids = tokenized["input_ids"].to(self.device)
+            state.token_ids = tokenized["token_ids"]
+            state.tokens = tokenized["tokens"]
+        else:
+            state.token_ids = list(prompt_token_ids)
+            state.tokens = [self.decode_token(tid) for tid in state.token_ids]
+            input_ids = torch.tensor([state.token_ids], device=self.device, dtype=torch.long)
         seq_len = len(state.token_ids)
 
         # 2. Forward pass with use_cache=True and output_attentions=True
@@ -178,12 +197,31 @@ class TransformerAdapter(ModelAdapter):
                 input_ids=input_ids,
                 past_key_values=None,
                 use_cache=True,
-                output_attentions=True
+                output_attentions=capture_attention
             )
 
         # 3. Store past_key_values and save logits of last position
         state.past_key_values = outputs.past_key_values
         state.last_logits = outputs.logits[:, -1, :].detach()
+
+        if not capture_attention:
+            state.prefill_attentions = None
+            return {
+                "session_id": None,
+                "prompt": prompt,
+                "tokens": state.tokens,
+                "token_ids": state.token_ids,
+                "seq_len": seq_len,
+                "layer": target_layer,
+                "head": target_head,
+                "matrix_shape": [],
+                "min_val": 0.0,
+                "max_val": 0.0,
+                "row_sums": [],
+                "is_causal": False,
+                "matrix": [],
+                "past_key_values_type": type(state.past_key_values).__name__,
+            }
 
         # 4. Extract attention tensors across layers
         # outputs.attentions is a tuple of [batch_size, num_heads, seq_len, seq_len]
@@ -429,6 +467,78 @@ class TransformerAdapter(ModelAdapter):
         """推理必需的 KV Cache（混合架构中可能还含线性层状态）实际字节数。"""
         return estimate_state_bytes(state.past_key_values)
 
+    def cache_breakdown(self, state: TransformerAdapterState) -> Dict[str, Any]:
+        """按 config 的 full_attention 层类型拆分实际缓存字节数。
+
+        不假设层数或层编号；全注意力层从 self.full_attn_layers 读取，
+        该字段在 load_model() 中由 config.layer_types 生成。纯注意力模型
+        的所有层都会被识别为 full_attention（linear_state_bytes=0）。
+        """
+        cache = state.past_key_values
+        if cache is None:
+            return {
+                "cache_bytes": 0,
+                "kv_bytes": 0,
+                "linear_state_bytes": 0,
+                "kv_element_bytes": 0,
+                "dtype_label": "",
+                "full_attn_layers": list(self.full_attn_layers),
+                "linear_layers": [],
+            }
+
+        layers = list(getattr(cache, "layers", []) or [])
+        full_layers = set(self.full_attn_layers) if self.full_attn_layers else set(range(len(layers)))
+        dtypes = set()
+        for layer in layers:
+            for attr in ("keys", "values", "conv_states", "recurrent_states"):
+                value = getattr(layer, attr, None)
+                if isinstance(value, torch.Tensor):
+                    dtypes.add(str(value.dtype).replace("torch.", ""))
+                elif isinstance(value, dict):
+                    dtypes.update(
+                        str(item.dtype).replace("torch.", "")
+                        for item in value.values()
+                        if isinstance(item, torch.Tensor)
+                    )
+                elif isinstance(value, (list, tuple)):
+                    dtypes.update(
+                        str(item.dtype).replace("torch.", "")
+                        for item in value
+                        if isinstance(item, torch.Tensor)
+                    )
+
+        kv_bytes = 0
+        kv_element_bytes = 0
+        for index, layer in enumerate(layers):
+            if index not in full_layers:
+                continue
+            for attr in ("keys", "values", "key_cache", "value_cache"):
+                value = getattr(layer, attr, None)
+                tensors = []
+                if isinstance(value, torch.Tensor):
+                    tensors = [value]
+                elif isinstance(value, (list, tuple)):
+                    tensors = [item for item in value if isinstance(item, torch.Tensor)]
+                for tensor in tensors:
+                    kv_bytes += int(tensor.numel() * tensor.element_size())
+                    if kv_element_bytes == 0:
+                        kv_element_bytes = int(tensor.element_size())
+
+        total_bytes = estimate_state_bytes(cache)
+        linear_state_bytes = max(0, total_bytes - kv_bytes)
+        return {
+            "cache_bytes": total_bytes,
+            "kv_bytes": kv_bytes,
+            "linear_state_bytes": linear_state_bytes,
+            "kv_element_bytes": kv_element_bytes,
+            "dtype_label": " + ".join(sorted(dtypes)),
+            "full_attn_layers": sorted(full_layers),
+            "linear_layers": [index for index in range(len(layers)) if index not in full_layers],
+        }
+
+    def cache_metrics(self, state: TransformerAdapterState) -> Dict[str, Any]:
+        return self.cache_breakdown(state)
+
     def _viz_history_bytes(self, state: TransformerAdapterState) -> int:
         """仅为可视化额外保存的 CPU 注意力历史字节数。"""
         return (
@@ -493,7 +603,7 @@ class TransformerAdapter(ModelAdapter):
 
         return InternalState(
             kind="attention",
-            model_type="transformer",
+            model_type=self.model_type,
             layer=effective_layer,
             head=target_head,
             num_layers=self.num_layers,
@@ -591,7 +701,7 @@ class TransformerAdapter(ModelAdapter):
         row_sums = [round(sum(row), 4) for row in matrix_list]
         state = InternalState(
             kind="attention",
-            model_type="transformer",
+            model_type=self.model_type,
             layer=effective_layer,
             head=head,
             num_layers=self.num_layers,

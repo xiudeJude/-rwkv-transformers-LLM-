@@ -6,9 +6,11 @@ from ..core.schemas import SingleStepInspectRequest, SingleStepInspectResponse, 
 from ..core.config import settings
 from ..models.adapter_base import ModelAdapter
 from ..models.adapter_registry import create_adapter
-# Importing the adapter modules registers "transformer" / "rwkv" / "mamba"
-# in the registry.
+# Importing the adapter modules registers "transformer" / "attention_baseline"
+# / "rwkv" / "mamba" in the registry. The baseline adapter is concept-lab only;
+# it does not add a top-level model tab.
 from ..models.transformer import TransformerAdapter
+from ..models.attention_baseline import PureAttentionAdapter
 from ..models.rwkv_engine import RWKVAdapter
 from ..models.mamba_engine import MambaAdapter, MAMBA_MAX_NEW_TOKENS
 from ..models.rwkv_session import rwkv_session_manager
