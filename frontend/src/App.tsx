@@ -51,6 +51,7 @@ const getWsUrl = (wsEndpoint: string) => {
 type StreamStatus = 'idle' | 'creating_session' | 'connecting' | 'streaming' | 'finished' | 'stopped' | 'error';
 type ModelArch = 'transformer' | 'rwkv' | 'mamba';
 type EngineStatus = 'unloaded' | 'loading' | 'ready' | 'busy' | 'error';
+type BackendStatus = 'checking' | 'connected' | 'disconnected';
 
 const MODEL_DISPLAY_NAMES: Record<ModelArch, string> = {
   transformer: 'Qwen3.5-0.8B 混合',
@@ -98,6 +99,7 @@ export function App() {
     rwkv: 'unloaded',
     mamba: 'unloaded',
   });
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>('checking');
   const modelMeta = modelMetaByArch[modelArch] ?? null;
   const engineStatus = engineStatusByArch[modelArch] ?? 'unloaded';
 
@@ -167,6 +169,7 @@ export function App() {
     setArchStatus(arch, 'loading');
     try {
       const res = await fetch(`${API_BASE}/api/model/info?model_type=${arch}`);
+      setBackendStatus('connected');
       if (res.status === 409) {
         clearArchMeta(arch);
         setArchStatus(arch, 'busy');
@@ -178,6 +181,7 @@ export function App() {
       const data: ModelMetadata = await res.json();
       storeArchMeta(arch, data);
     } catch {
+      setBackendStatus('disconnected');
       clearArchMeta(arch);
       setArchStatus(arch, 'error');
     }
@@ -260,6 +264,30 @@ export function App() {
     ],
   };
   const presets = presetsByArch[modelArch];
+
+  // Backend connectivity is independent from per-model load status.
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 5000);
+    let cancelled = false;
+    fetch(`${API_BASE}/health`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`health ${res.status}`);
+        return res.json();
+      })
+      .then(() => {
+        if (!cancelled) setBackendStatus('connected');
+      })
+      .catch(() => {
+        if (!cancelled) setBackendStatus('disconnected');
+      })
+      .finally(() => window.clearTimeout(timer));
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   // Model metadata is loaded lazily when a tab first runs generation or inspection.
   useEffect(() => {
@@ -912,11 +940,14 @@ export function App() {
   };
   const activeBadge = statusBadges[streamStatus];
 
+  const knownDevice =
+    modelMeta?.device ||
+    Object.values(modelMetaByArch).find((meta) => meta?.device)?.device;
   const engineStatusLabel =
     engineStatus === 'ready'
-      ? `已连接 · ${modelMeta?.device.toUpperCase() ?? 'CUDA'}`
+      ? '已加载'
       : engineStatus === 'loading'
-        ? '加载中...'
+        ? '加载中'
         : engineStatus === 'busy'
           ? '后端忙碌,稍后重试'
           : engineStatus === 'error'
@@ -930,6 +961,19 @@ export function App() {
         : engineStatus === 'busy' || engineStatus === 'error'
           ? 'bg-rose-400'
           : 'bg-amber-400';
+
+  const backendStatusLabel =
+    backendStatus === 'connected'
+      ? `已连接${knownDevice ? ` · ${knownDevice.toUpperCase()}` : ''}`
+      : backendStatus === 'checking'
+        ? '连接中...'
+        : '无法连接后端';
+  const backendDotClass =
+    backendStatus === 'connected'
+      ? 'bg-emerald-400 animate-pulse'
+      : backendStatus === 'checking'
+        ? 'bg-sky-400 animate-pulse'
+        : 'bg-rose-400';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -1012,16 +1056,19 @@ export function App() {
             }
           >
             <Cpu className="w-3.5 h-3.5 text-sky-400" />
-            <span className="text-slate-400">当前引擎:</span>
             <span className="font-mono text-sky-300 font-semibold whitespace-nowrap">
               {MODEL_DISPLAY_NAMES[modelArch]}
+            </span>
+            <span className="flex items-center gap-1 text-slate-300 font-mono text-[11px] whitespace-nowrap">
+              <span className={`w-2 h-2 rounded-full ${engineDotClass}`} />
+              {engineStatusLabel}
             </span>
           </div>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
-            <div className={`w-2 h-2 rounded-full ${engineDotClass}`} />
+            <div className={`w-2 h-2 rounded-full ${backendDotClass}`} />
             <span className="text-slate-300 font-mono text-[11px] whitespace-nowrap">
-              {engineStatusLabel}
+              {backendStatusLabel}
             </span>
           </div>
         </div>
