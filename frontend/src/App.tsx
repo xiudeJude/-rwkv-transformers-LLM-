@@ -51,6 +51,18 @@ type StreamStatus = 'idle' | 'creating_session' | 'connecting' | 'streaming' | '
 type ModelArch = 'transformer' | 'rwkv' | 'mamba';
 type EngineStatus = 'unloaded' | 'loading' | 'ready' | 'busy' | 'error';
 
+const MODEL_DISPLAY_NAMES: Record<ModelArch, string> = {
+  transformer: 'Qwen3.5-0.8B 混合',
+  rwkv: 'RWKV-7 Goose 0.4B',
+  mamba: 'Mamba-130M 基座',
+};
+
+const redactUserPath = (value: string): string =>
+  value
+    .replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/]+/gi, '$1<user>')
+    .replace(/(\/home\/)[^/]+/g, '$1<user>')
+    .replace(/(\/Users\/)[^/]+/g, '$1<user>');
+
 export function App() {
   const [prompt, setPrompt] = useState('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
   const [modelArch, setModelArch] = useState<ModelArch>('transformer');
@@ -995,16 +1007,18 @@ export function App() {
 
         {/* Model Meta Badge */}
         <div className="flex items-center gap-3 text-xs">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800"
+            title={
+              modelMeta?.model_id
+                ? `完整模型路径（已脱敏）: ${redactUserPath(modelMeta.model_id)}`
+                : '模型尚未加载；首次生成或检查时加载'
+            }
+          >
             <Cpu className="w-3.5 h-3.5 text-sky-400" />
             <span className="text-slate-400">当前引擎:</span>
-            <span className="font-mono text-sky-300 font-semibold">
-              {modelMeta?.model_id ||
-                (modelArch === 'transformer'
-                  ? 'Qwen3.5-0.8B 混合 (GGUF)'
-                  : modelArch === 'rwkv'
-                    ? 'RWKV7-0.4B (FP16)'
-                    : 'Mamba-130M 基座 (FP16)')}
+            <span className="font-mono text-sky-300 font-semibold whitespace-nowrap">
+              {MODEL_DISPLAY_NAMES[modelArch]}
             </span>
           </div>
 
