@@ -13,12 +13,14 @@ import {
   Clock,
   AlertTriangle,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  FlaskConical
 } from 'lucide-react';
 import { AttentionHeatmap, type IncrementalRowPayload } from './components/Visualizers/AttentionHeatmap';
 import { RWKVWaterfall, type RWKVIncrementalRowPayload } from './components/Visualizers/RWKVWaterfall';
 import { RWKVStateModal } from './components/Visualizers/RWKVStateModal';
 import { MambaStatePanel } from './components/Visualizers/MambaStatePanel';
+import { ConceptLab } from './components/ConceptLab';
 import { TopKBarChart } from './components/Visualizers/TopKBarChart';
 import { LayerHeadSelector } from './components/LayerHeadSelector';
 import { SmoothRenderPipeline, type TokenTimingMetric, type AnyTokenStepPayload } from './utils/renderPipeline';
@@ -51,6 +53,7 @@ type ModelArch = 'transformer' | 'rwkv' | 'mamba';
 export function App() {
   const [prompt, setPrompt] = useState('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
   const [modelArch, setModelArch] = useState<ModelArch>('transformer');
+  const [showConceptLab, setShowConceptLab] = useState(false);
   const [currentLayer, setCurrentLayer] = useState(3);
   const [currentHead, setCurrentHead] = useState(0);
   const [temperature, setTemperature] = useState(0.7);
@@ -273,6 +276,7 @@ export function App() {
 
   // Architecture switch handler
   const handleArchSwitch = (newArch: ModelArch) => {
+    setShowConceptLab(false);
     if (newArch === modelArch) return;
 
     // Explicitly terminate active session and release GPU VRAM before switching paradigm
@@ -883,7 +887,7 @@ export function App() {
           <button
             onClick={() => handleArchSwitch('transformer')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
-              modelArch === 'transformer'
+              !showConceptLab && modelArch === 'transformer'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
@@ -894,7 +898,7 @@ export function App() {
           <button
             onClick={() => handleArchSwitch('rwkv')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
-              modelArch === 'rwkv'
+              !showConceptLab && modelArch === 'rwkv'
                 ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/30'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
@@ -905,13 +909,24 @@ export function App() {
           <button
             onClick={() => handleArchSwitch('mamba')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
-              modelArch === 'mamba'
+              !showConceptLab && modelArch === 'mamba'
                 ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-600/30'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
             <span>Mamba (130M)</span>
+          </button>
+          <button
+            onClick={() => setShowConceptLab(true)}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              showConceptLab
+                ? 'bg-gradient-to-r from-amber-600 to-rose-600 text-white shadow-md shadow-amber-600/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+            <span>概念实验室</span>
           </button>
         </div>
 
@@ -940,7 +955,10 @@ export function App() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+      {showConceptLab ? (
+        <ConceptLab apiBase={API_BASE} />
+      ) : (
+        <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
         {/* Prompt Input & Control Card */}
         <section className="bg-slate-900/60 rounded-xl border border-slate-800/80 p-5 shadow-xl space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1367,7 +1385,8 @@ export function App() {
             ) : null}
           </div>
         </section>
-      </main>
+        </main>
+      )}
 
       {/* RWKV Level 2 State Inspection Modal */}
       {isRwkvModalOpen && rwkvModalMatrix && (
