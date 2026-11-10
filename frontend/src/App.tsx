@@ -944,7 +944,7 @@ export function App() {
             </h1>
             <p className="text-[11px] text-slate-400 whitespace-nowrap">
               {modelArch === 'transformer'
-                ? 'Full Attention · Canvas · 60 FPS'
+                ? '混合注意力 · Canvas · 60 FPS'
                 : modelArch === 'rwkv'
                   ? 'WKV 状态演化 · Level 2 探针'
                   : '递归状态 · conv_state / ssm_state'}

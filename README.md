@@ -1,6 +1,6 @@
-# LLM 可解释性交互工坊（Transformer vs RWKV 双范式对比）
+# LLM 可解释性交互工坊（Transformer / RWKV / Mamba 三类架构）
 
-面向“传智杯 Vibe Coding 挑战赛”，帮助大模型学习者、高校师生与可解释性研究者，直观解构并并排观测以 Transformer（因果全局自注意力）为代表的“二次方复杂度注意力机制”，与以 RWKV-7（WKV 线性循环状态递推）为代表的“常数显存/线性复杂度 RNN 隐状态机制”在文本逐 token 生成过程中的微观物理演化差异。消除深度学习“黑盒”隔阂，提供微观到宏观的全景可解释性探针。
+面向“传智杯 Vibe Coding 挑战赛”，帮助大模型学习者、高校师生与可解释性研究者，直观解构并并排观测三类架构在文本逐 token 生成过程中的微观物理演化差异：Qwen3.5 的混合注意力（6 层 Full Attention + 18 层 Gated DeltaNet 线性递归）、RWKV-7 的 WKV 线性循环状态，以及 Mamba 的选择性状态空间。消除深度学习“黑盒”隔阂，提供微观到宏观的全景可解释性探针。
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 视图模块 | 观测范式 | 核心呈现特征 |
 | :--- | :--- | :--- |
-| **Transformer 因果注意力视图** | 全局 Softmax 注意力 | Prefill 基底方阵渲染 + Decode 增量单行生长，Log-scale 色标定标，动态下三角注意力稀疏度 |
+| **Qwen3.5 混合注意力视图** | 6 个 Full Attention 层的 Softmax 注意力 | 只对 `layer_types=full_attention` 的层展示注意力矩阵；Prefill 基底方阵 + Decode 增量单行，Log-scale 色标，动态下三角稀疏度 |
 | **RWKV-7 隐状态演化瀑布图** | 循环隐状态衰减与注能 | 左右双色带对称对照：色带 A（Viridis 绝对模长）+ 色带 B（Coolwarm $\mathbf{\Delta}_t$ 扰动差分），分层独立定标 |
 | **Level 2 状态探针模态窗** | 微观权重矩阵下钻 | 点击任意历史步，以 < 10ms 延迟回溯单头 $64 \times 64$ 原始隐状态张量，查看 4,096 个权重热力分布 |
 | **Mamba 递归状态面板** | 统一 `recurrent_state` 组件 | 按 `meta.components` 展示 `conv_state` / `ssm_state` 的 shape、dtype、字节数与逐层范数；不伪造注意力或 RWKV head |
