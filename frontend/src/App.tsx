@@ -151,11 +151,32 @@ export function App() {
     }
   };
 
-  // Quick preset prompts
+  // Quick preset prompts: each architecture has a Chinese and English example.
   const presets = [
-    '注意力机制让大语言模型能够精确捕捉长距离语义依赖关系',
-    'RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度',
-    '人工智能的发展正在从单一模型走向多智能体协同'
+    {
+      label: 'Transformer 中文',
+      text: '注意力机制让大语言模型能够精确捕捉长距离语义依赖关系',
+    },
+    {
+      label: 'Transformer English',
+      text: 'Attention mechanisms allow large language models to capture long-range semantic dependencies.',
+    },
+    {
+      label: 'RWKV 中文',
+      text: 'RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度',
+    },
+    {
+      label: 'RWKV English',
+      text: 'RWKV replaces quadratic attention with linear recurrent state updates for efficient sequence modeling.',
+    },
+    {
+      label: 'Mamba 中文',
+      text: 'Mamba通过选择性状态空间模型实现线性复杂度的长序列建模',
+    },
+    {
+      label: 'Mamba English',
+      text: 'Mamba uses selective state space models for efficient long-sequence modeling.',
+    },
   ];
 
   // Fetch model metadata on initial load
@@ -299,7 +320,7 @@ export function App() {
         })
         .catch(console.warn);
     } else {
-      setPrompt('Mamba通过选择性状态空间模型实现线性复杂度的长序列建模');
+      setPrompt('Mamba uses selective state space models for efficient long-sequence modeling.');
       setMaxNewTokens((value) => Math.min(value, 128));
       fetch(`${API_BASE}/api/model/info?model_type=mamba`)
         .then((res) => res.json())
@@ -928,17 +949,17 @@ export function App() {
               <span>输入推理 Prompt</span>
             </label>
 
-            <div className="flex items-center gap-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
               <span>快捷预设:</span>
-              {presets.map((preset, idx) => (
+              {presets.map((preset) => (
                 <button
-                  key={idx}
-                  onClick={() => setPrompt(preset)}
+                  key={preset.label}
+                  onClick={() => setPrompt(preset.text)}
                   disabled={isStreaming}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors truncate max-w-[140px] disabled:opacity-50"
-                  title={preset}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors disabled:opacity-50"
+                  title={preset.text}
                 >
-                  预设 {idx + 1}
+                  {preset.label}
                 </button>
               ))}
             </div>
@@ -996,6 +1017,12 @@ export function App() {
               )}
             </div>
           </div>
+
+          {modelArch === 'mamba' && (
+            <div className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2">
+              Mamba-130M 主要支持英文：该基座模型以英文语料为主，建议使用英文 prompt；中文输出质量可能较差。
+            </div>
+          )}
 
           {/* Quick max_new_tokens slider */}
           <div className="flex items-center gap-4 text-xs border-t border-slate-800/80 pt-3">
