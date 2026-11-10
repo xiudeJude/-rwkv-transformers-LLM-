@@ -37,6 +37,8 @@ async def memory_growth(req: MemoryGrowthRequest):
         return await asyncio.to_thread(
             concept_lab.run_memory_growth, req.prompt, req.lengths
         )
+    except concept_lab.ModelBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -62,6 +64,8 @@ async def sample_logits(req: SampleRequest):
         return await asyncio.to_thread(
             concept_lab.sample_topk_logits, req.prompt, req.model_type
         )
+    except concept_lab.ModelBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

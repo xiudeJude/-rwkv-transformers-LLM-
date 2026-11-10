@@ -14,6 +14,7 @@ from ..models.attention_baseline import PureAttentionAdapter
 from ..models.rwkv_engine import RWKVAdapter
 from ..models.mamba_engine import MambaAdapter, MAMBA_MAX_NEW_TOKENS
 from ..models.rwkv_session import rwkv_session_manager
+from ..services.model_gate import ModelBusyError, model_gate
 
 router = APIRouter()
 
@@ -25,25 +26,37 @@ _mamba_engine: Optional[ModelAdapter] = None
 def get_engine() -> ModelAdapter:
     global _engine
     if _engine is None:
-        _engine = create_adapter(settings.MODEL_TYPE)
-        # Initialize default model
-        _engine.load_model(settings.DEFAULT_TRANSFORMER, device=settings.DEVICE)
+        with model_gate.hold():
+            if _engine is None:
+                _engine = create_adapter(settings.MODEL_TYPE)
+                # Initialize default model
+                _engine.load_model(settings.DEFAULT_TRANSFORMER, device=settings.DEVICE)
     return _engine
 
 def get_rwkv_engine() -> ModelAdapter:
     global _rwkv_engine
     if _rwkv_engine is None:
-        _rwkv_engine = create_adapter(settings.RWKV_MODEL_TYPE)
-        _rwkv_engine.load_model(settings.DEFAULT_RWKV, device=settings.DEVICE)
+        with model_gate.hold():
+            if _rwkv_engine is None:
+                _rwkv_engine = create_adapter(settings.RWKV_MODEL_TYPE)
+                _rwkv_engine.load_model(settings.DEFAULT_RWKV, device=settings.DEVICE)
     return _rwkv_engine
 
 
 def get_mamba_engine() -> ModelAdapter:
     global _mamba_engine
     if _mamba_engine is None:
-        _mamba_engine = create_adapter(settings.MAMBA_MODEL_TYPE)
-        _mamba_engine.load_model(settings.DEFAULT_MAMBA, device=settings.DEVICE)
+        with model_gate.hold():
+            if _mamba_engine is None:
+                _mamba_engine = create_adapter(settings.MAMBA_MODEL_TYPE)
+                _mamba_engine.load_model(settings.DEFAULT_MAMBA, device=settings.DEVICE)
     return _mamba_engine
+
+
+def load_model_exclusively(engine: ModelAdapter, model_name: str) -> None:
+    """概念实验进行中时拒绝重新加载模型，避免显存竞争。"""
+    with model_gate.hold():
+        engine.load_model(model_name, device=settings.DEVICE)
 
 
 def _dump_state(state: InternalState) -> Dict[str, Any]:
@@ -54,21 +67,22 @@ def _dump_state(state: InternalState) -> Dict[str, Any]:
 def release_global_engines():
     """释放在架构页面缓存过的全局引擎，供概念实验室顺序加载模型前调用。"""
     global _engine, _rwkv_engine, _mamba_engine
-    for engine in (_engine, _rwkv_engine, _mamba_engine):
-        if engine is not None:
-            try:
-                engine.unload()
-            except Exception as exc:
-                print(f"[ModelPool] Failed to unload global engine: {exc}")
-    _engine = None
-    _rwkv_engine = None
-    _mamba_engine = None
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
+    with model_gate.hold():
+        for engine in (_engine, _rwkv_engine, _mamba_engine):
+            if engine is not None:
+                try:
+                    engine.unload()
+                except Exception as exc:
+                    print(f"[ModelPool] Failed to unload global engine: {exc}")
+        _engine = None
+        _rwkv_engine = None
+        _mamba_engine = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 @router.get("/health")
 async def health():
@@ -84,6 +98,8 @@ async def model_info(model_type: str = Query("transformer", description="'transf
         else:
             engine = await asyncio.to_thread(get_engine)
         return await asyncio.to_thread(engine.get_metadata)
+    except ModelBusyError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -93,9 +109,7 @@ async def inspect_single_step(req: SingleStepInspectRequest):
         engine = await asyncio.to_thread(get_engine)
         # If user explicitly requested a different model, load it if needed
         if req.model_name and req.model_name != engine.model_id:
-            await asyncio.to_thread(
-                engine.load_model, req.model_name, device=settings.DEVICE
-            )
+            await asyncio.to_thread(load_model_exclusively, engine, req.model_name)
 
         result = await asyncio.to_thread(
             engine.inspect_single_step,
@@ -106,6 +120,8 @@ async def inspect_single_step(req: SingleStepInspectRequest):
             temperature=req.temperature,
         )
         return result
+    except ModelBusyError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inspection failed: {str(e)}")
 
@@ -136,6 +152,8 @@ async def create_session(req: CreateSessionRequest):
             "prefill_attention": prefill_result,
             "state": _dump_state(state)
         }
+    except ModelBusyError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prefill failed: {str(e)}")
 
@@ -368,6 +386,8 @@ async def create_rwkv_session(req: CreateSessionRequest):
             "prefill_state": prefill_result,
             "state": _dump_state(state)
         }
+    except ModelBusyError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RWKV Prefill failed: {str(e)}")
 
@@ -595,6 +615,8 @@ async def create_mamba_session(req: CreateSessionRequest):
             "prefill_state": prefill_result,
             "state": _dump_state(state),
         }
+    except ModelBusyError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Mamba Prefill failed: {str(e)}")
 

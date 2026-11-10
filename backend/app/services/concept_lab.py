@@ -6,7 +6,6 @@ and memory shapes.
 """
 
 import gc
-import threading
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -17,6 +16,7 @@ from ..models.attention_baseline import PureAttentionAdapter
 from ..models.mamba_engine import MambaAdapter
 from ..models.rwkv_engine import RWKVAdapter
 from ..models.transformer import TransformerAdapter
+from .model_gate import ModelBusyError, model_gate
 
 MEMORY_MODEL_TYPES = ("transformer", "attention_baseline", "rwkv", "mamba")
 TOKENIZER_MODEL_TYPES = ("transformer", "rwkv", "mamba")
@@ -25,7 +25,6 @@ SAMPLE_MODEL_TYPES = ("transformer", "attention_baseline", "rwkv", "mamba")
 DEFAULT_MEASURE_LENGTHS = (64, 128, 256, 512)
 ATTENTION_EXTRA_LENGTHS = (1024, 2048)
 MAX_MEASURE_LENGTH = 2048
-_MODEL_LOCK = threading.Lock()
 
 
 def _model_spec(model_type: str):
@@ -285,7 +284,7 @@ def run_memory_growth(prompt: str, lengths: Optional[List[int]] = None) -> Dict[
     if any(length < 1 or length > MAX_MEASURE_LENGTH for length in requested):
         raise ValueError(f"lengths 必须在 1 ~ {MAX_MEASURE_LENGTH} 之间。")
 
-    with _MODEL_LOCK:
+    with model_gate.hold():
         models = [
             _collect_growth(model_type, prompt, requested)
             for model_type in MEMORY_MODEL_TYPES
@@ -384,7 +383,7 @@ def sample_topk_logits(prompt: str, model_type: str) -> Dict[str, Any]:
 
     adapter_cls, model_id = _model_spec(model_type)
     adapter = adapter_cls()
-    with _MODEL_LOCK:
+    with model_gate.hold():
         try:
             adapter.load_model(model_id, device=settings.DEVICE)
             state = adapter.create_state()
