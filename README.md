@@ -26,9 +26,10 @@
 
 ### 3. 概念实验室
 
-顶部新增独立的“概念实验室”入口，与三个架构 Tab 并列。包含状态/内存增长、
-三 tokenizer 分词对比、真实 logits 的采样分布实验；数据来源与限制见
-[`docs/concept-lab.md`](docs/concept-lab.md)。
+顶部新增独立的“概念实验室”入口，与三个架构 Tab 并列。包含四模型
+（Qwen3.5 混合 / Qwen2.5 纯注意力基线 / RWKV / Mamba）的 prefill 缓存增长、
+三 tokenizer 分词对比、真实 logits 的采样分布实验；数据来源、理论核对与限制
+见 [`docs/concept-lab.md`](docs/concept-lab.md)。
 
 ### 2. 双引擎双通道数据流架构
 
@@ -127,6 +128,7 @@ cp backend/.env.example backend/.env
 DEFAULT_TRANSFORMER=models/Qwen3.5-0.8B-GGUF
 DEFAULT_RWKV=models/rwkv7-g1d-0.4b-20260210-ctx8192.pth
 DEFAULT_MAMBA=state-spaces/mamba-130m-hf
+DEFAULT_ATTENTION_BASELINE=Qwen/Qwen2.5-0.5B
 DEVICE=cuda
 HF_ENDPOINT=https://hf-mirror.com
 ```
@@ -170,7 +172,19 @@ pytest -q
 
 - 多数测试会加载 `backend/.env` 中配置的真实模型，请先完成上面的模型下载与环境变量配置。
 - `test_mamba_adapter.py` 在 `DEFAULT_MAMBA` 权重不可用时会自动 skip，不会阻断无模型机器上的快速测试。
+- `test_attention_baseline.py` 在 `DEFAULT_ATTENTION_BASELINE` 权重不可用时会自动 skip；可用时它会从 config 推导 Qwen2.5-0.5B 的 `12,288 B/token`，并核对实际 KV 字节数与理论值完全相等。
 - `test_concurrency_attention.py`、`test_incremental_attention_stream.py`、`test_rwkv_stream_and_state.py` 会访问 `http://127.0.0.1:8000`，运行前需先启动后端服务（例如在 `backend` 目录执行 `python main.py`）。
+
+前后端采样实现一致性核对（不新增 npm 依赖）：
+
+```bash
+# 1. 用后端 sampling.py 生成 fixture
+.venv/Scripts/python.exe backend/scripts/generate_sampling_fixtures.py
+
+# 2. 用前端 sampling.ts 重算并逐值比较（容差 1e-6）
+cd frontend
+npm run test:sampling
+```
 - 只运行不依赖外部服务的快速测试：
   ```bash
   pytest backend/tests/test_close_idempotent.py \
@@ -193,6 +207,10 @@ pytest -q
   ```bash
   huggingface-cli download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q8_0.gguf --local-dir backend/models/Qwen3.5-0.8B-GGUF
   ```
+* **架构说明**：Qwen3.5-0.8B 是混合架构。本机 config 的 `layer_types` 中
+  `[3, 7, 11, 15, 19, 23]` 为 `full_attention`，其余 18 层为线性层。代码从
+  config 动态读取该列表，不写死层号；概念实验室会分别统计 KV Cache 与线性层
+  递归状态。
 
 ### 2. RWKV-7 Goose 架构模型：`rwkv7-g1d-0.4b`
 * **模型官方来源**：[`BlinkDL/rwkv7-g1`](https://huggingface.co/BlinkDL/rwkv7-g1)
@@ -218,6 +236,23 @@ pytest -q
   ```ini
   DEFAULT_MAMBA=state-spaces/mamba-130m-hf
   MAMBA_MODEL_TYPE=mamba
+  ```
+
+### 4. 纯注意力对照模型：`Qwen/Qwen2.5-0.5B`
+* **模型官方来源**：[`Qwen/Qwen2.5-0.5B`](https://huggingface.co/Qwen/Qwen2.5-0.5B)
+* **模型性质**：**基座模型（base model），不是对话/指令微调模型**；仅用于概念实验室的纯注意力对照，不新增顶层 Tab。
+* **默认模型 ID**：`Qwen/Qwen2.5-0.5B`（`transformers` 会自动下载到 Hugging Face 缓存）
+* **可选本地路径**：`backend/models/Qwen2.5-0.5B`
+* **命令行下载**：
+  ```bash
+  huggingface-cli download Qwen/Qwen2.5-0.5B --local-dir backend/models/Qwen2.5-0.5B
+  ```
+* **实测资源**：bf16 权重约 988 MB；24 层全部为 `full_attention`，2 个 KV 头、
+  64 头维度，KV 缓存为 `12,288 B/token`。
+* **配置项**：
+  ```ini
+  DEFAULT_ATTENTION_BASELINE=Qwen/Qwen2.5-0.5B
+  ATTENTION_BASELINE_MODEL_TYPE=attention_baseline
   ```
 
 > **国内下载加速提示**：

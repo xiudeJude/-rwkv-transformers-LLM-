@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import sys
@@ -11,6 +12,7 @@ if backend_dir not in sys.path:
 from app.core.config import settings
 from app.services import concept_lab
 from app.services.sampling import compute_distribution
+from scripts.generate_sampling_fixtures import FIXTURE_PATH, build_fixture
 
 
 def _softmax(values):
@@ -63,6 +65,15 @@ def test_sampling_transformations_are_composable():
     combined = compute_distribution(logits, ids, temperature=0.7, top_k=2, top_p=0.8,
                                     repetition_penalty=1.2, seen_ids=[10])
     assert abs(sum(combined) - 1.0) < 1e-9
+
+
+def test_sampling_fixture_matches_backend_reference():
+    with open(FIXTURE_PATH, encoding="utf-8") as handle:
+        committed = json.load(handle)
+    assert committed == build_fixture()
+    assert committed["source"] == "backend/app/services/sampling.py"
+    assert committed["tolerance"] == 1e-6
+    assert len(committed["cases"]) >= 10
 
 
 def test_memory_series_description_is_derived_from_values():

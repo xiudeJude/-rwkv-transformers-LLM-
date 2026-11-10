@@ -1,0 +1,520 @@
+{
+  "generated_by": "backend/scripts/generate_sampling_fixtures.py",
+  "source": "backend/app/services/sampling.py",
+  "tolerance": 1e-06,
+  "cases": [
+    {
+      "name": "raw_softmax",
+      "mode": "raw",
+      "items": [
+        {
+          "id": 101,
+          "token": "<tok_101>",
+          "logit": 2.4
+        },
+        {
+          "id": 102,
+          "token": "<tok_102>",
+          "logit": 1.1
+        },
+        {
+          "id": 103,
+          "token": "<tok_103>",
+          "logit": 0.3
+        },
+        {
+          "id": 104,
+          "token": "<tok_104>",
+          "logit": -0.6
+        },
+        {
+          "id": 105,
+          "token": "<tok_105>",
+          "logit": -1.4
+        },
+        {
+          "id": 106,
+          "token": "<tok_106>",
+          "logit": 3.2
+        },
+        {
+          "id": 107,
+          "token": "<tok_107>",
+          "logit": 0.0
+        }
+      ],
+      "params": {
+        "temperature": 1.0,
+        "topK": 0,
+        "topP": 1.0,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        0.2643121777838682,
+        0.07203347173216233,
+        0.03236672523517965,
+        0.013159328465784456,
+        0.005912867428009201,
+        0.5882375695569764,
+        0.023977859798019852
+      ]
+    },
+    {
+      "name": "temperature_0_35",
+      "mode": "temperature",
+      "items": [
+        {
+          "id": 201,
+          "token": "<tok_201>",
+          "logit": 2.8
+        },
+        {
+          "id": 202,
+          "token": "<tok_202>",
+          "logit": 2.1
+        },
+        {
+          "id": 203,
+          "token": "<tok_203>",
+          "logit": 1.4
+        },
+        {
+          "id": 204,
+          "token": "<tok_204>",
+          "logit": 0.2
+        },
+        {
+          "id": 205,
+          "token": "<tok_205>",
+          "logit": -0.5
+        },
+        {
+          "id": 206,
+          "token": "<tok_206>",
+          "logit": -1.2
+        }
+      ],
+      "params": {
+        "temperature": 0.35,
+        "topK": 0,
+        "topP": 1.0,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        0.866298719979615,
+        0.11724078263595633,
+        0.015866814524919278,
+        0.0005146122177197473,
+        6.964519024212341e-05,
+        9.425451547485545e-06
+      ]
+    },
+    {
+      "name": "temperature_tiny_clamped",
+      "mode": "temperature",
+      "items": [
+        {
+          "id": 301,
+          "token": "<tok_301>",
+          "logit": 0.2
+        },
+        {
+          "id": 302,
+          "token": "<tok_302>",
+          "logit": 0.19
+        },
+        {
+          "id": 303,
+          "token": "<tok_303>",
+          "logit": 0.18
+        },
+        {
+          "id": 304,
+          "token": "<tok_304>",
+          "logit": -3.0
+        }
+      ],
+      "params": {
+        "temperature": 1e-09,
+        "topK": 0,
+        "topP": 1.0,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        1.0,
+        3.720075976020836e-44,
+        1.3838965267364228e-87,
+        0.0
+      ]
+    },
+    {
+      "name": "top_k_three",
+      "mode": "topK",
+      "items": [
+        {
+          "id": 401,
+          "token": "<tok_401>",
+          "logit": 9.0
+        },
+        {
+          "id": 402,
+          "token": "<tok_402>",
+          "logit": 8.0
+        },
+        {
+          "id": 403,
+          "token": "<tok_403>",
+          "logit": 7.0
+        },
+        {
+          "id": 404,
+          "token": "<tok_404>",
+          "logit": 6.0
+        },
+        {
+          "id": 405,
+          "token": "<tok_405>",
+          "logit": 5.0
+        },
+        {
+          "id": 406,
+          "token": "<tok_406>",
+          "logit": 4.0
+        }
+      ],
+      "params": {
+        "temperature": 1.0,
+        "topK": 3,
+        "topP": 1.0,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        0.6652409557748218,
+        0.24472847105479764,
+        0.09003057317038046,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "top_k_larger_than_candidates",
+      "mode": "topK",
+      "items": [
+        {
+          "id": 501,
+          "token": "<tok_501>",
+          "logit": 1.5
+        },
+        {
+          "id": 502,
+          "token": "<tok_502>",
+          "logit": 1.2
+        },
+        {
+          "id": 503,
+          "token": "<tok_503>",
+          "logit": 0.9
+        },
+        {
+          "id": 504,
+          "token": "<tok_504>",
+          "logit": 0.1
+        }
+      ],
+      "params": {
+        "temperature": 1.0,
+        "topK": 999,
+        "topP": 1.0,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        0.39428650144041855,
+        0.29209462443591044,
+        0.21638901994530585,
+        0.09722985417836506
+      ]
+    },
+    {
+      "name": "top_p_0_78",
+      "mode": "topP",
+      "items": [
+        {
+          "id": 601,
+          "token": "<tok_601>",
+          "logit": 3.1
+        },
+        {
+          "id": 602,
+          "token": "<tok_602>",
+          "logit": 2.7
+        },
+        {
+          "id": 603,
+          "token": "<tok_603>",
+          "logit": 2.2
+        },
+        {
+          "id": 604,
+          "token": "<tok_604>",
+          "logit": 1.6
+        },
+        {
+          "id": 605,
+          "token": "<tok_605>",
+          "logit": 0.8
+        },
+        {
+          "id": 606,
+          "token": "<tok_606>",
+          "logit": 0.1
+        },
+        {
+          "id": 607,
+          "token": "<tok_607>",
+          "logit": -0.7
+        }
+      ],
+      "params": {
+        "temperature": 1.0,
+        "topK": 0,
+        "topP": 0.78,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        0.48148921785244714,
+        0.32275187467651634,
+        0.19575890747103664,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "repetition_negative_logits",
+      "mode": "repetition",
+      "items": [
+        {
+          "id": 701,
+          "token": "<tok_701>",
+          "logit": -1.5
+        },
+        {
+          "id": 702,
+          "token": "<tok_702>",
+          "logit": -0.2
+        },
+        {
+          "id": 703,
+          "token": "<tok_703>",
+          "logit": 0.7
+        },
+        {
+          "id": 704,
+          "token": "<tok_704>",
+          "logit": -2.4
+        },
+        {
+          "id": 705,
+          "token": "<tok_705>",
+          "logit": 1.1
+        }
+      ],
+      "params": {
+        "temperature": 1.0,
+        "topK": 0,
+        "topP": 1.0,
+        "repetitionPenalty": 1.8,
+        "seenTokenIds": [
+          702,
+          704
+        ]
+      },
+      "expected": [
+        0.037488108056573606,
+        0.11721663034197459,
+        0.3383306812788218,
+        0.002234514021086654,
+        0.5047300663015434
+      ]
+    },
+    {
+      "name": "combined_all_stages",
+      "mode": "combined",
+      "items": [
+        {
+          "id": 801,
+          "token": "<tok_801>",
+          "logit": 4.2
+        },
+        {
+          "id": 802,
+          "token": "<tok_802>",
+          "logit": 3.6
+        },
+        {
+          "id": 803,
+          "token": "<tok_803>",
+          "logit": 3.1
+        },
+        {
+          "id": 804,
+          "token": "<tok_804>",
+          "logit": 2.4
+        },
+        {
+          "id": 805,
+          "token": "<tok_805>",
+          "logit": 1.8
+        },
+        {
+          "id": 806,
+          "token": "<tok_806>",
+          "logit": 1.1
+        },
+        {
+          "id": 807,
+          "token": "<tok_807>",
+          "logit": 0.4
+        },
+        {
+          "id": 808,
+          "token": "<tok_808>",
+          "logit": -0.3
+        },
+        {
+          "id": 809,
+          "token": "<tok_809>",
+          "logit": -1.0
+        },
+        {
+          "id": 810,
+          "token": "<tok_810>",
+          "logit": -1.8
+        }
+      ],
+      "params": {
+        "temperature": 0.65,
+        "topK": 6,
+        "topP": 0.85,
+        "repetitionPenalty": 1.15,
+        "seenTokenIds": [
+          803,
+          808
+        ]
+      },
+      "expected": [
+        0.7156686349377923,
+        0.2843313650622077,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "combined_single_candidate_survives",
+      "mode": "combined",
+      "items": [
+        {
+          "id": 901,
+          "token": "<tok_901>",
+          "logit": 2.0
+        },
+        {
+          "id": 902,
+          "token": "<tok_902>",
+          "logit": 1.9
+        },
+        {
+          "id": 903,
+          "token": "<tok_903>",
+          "logit": 1.8
+        },
+        {
+          "id": 904,
+          "token": "<tok_904>",
+          "logit": 1.7
+        },
+        {
+          "id": 905,
+          "token": "<tok_905>",
+          "logit": 1.6
+        }
+      ],
+      "params": {
+        "temperature": 1.2,
+        "topK": 2,
+        "topP": 1e-06,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "combined_top_k_above_candidate_count",
+      "mode": "combined",
+      "items": [
+        {
+          "id": 1001,
+          "token": "<tok_1001>",
+          "logit": 0.5
+        },
+        {
+          "id": 1002,
+          "token": "<tok_1002>",
+          "logit": 0.4
+        },
+        {
+          "id": 1003,
+          "token": "<tok_1003>",
+          "logit": 0.3
+        }
+      ],
+      "params": {
+        "temperature": 0.9,
+        "topK": 50,
+        "topP": 0.95,
+        "repetitionPenalty": 1.2,
+        "seenTokenIds": [
+          1002
+        ]
+      },
+      "expected": [
+        0.37998428336712625,
+        0.31574808842027663,
+        0.3042676282125972
+      ]
+    },
+    {
+      "name": "empty_candidates",
+      "mode": "raw",
+      "items": [],
+      "params": {
+        "temperature": 1.0,
+        "topK": 0,
+        "topP": 1.0,
+        "repetitionPenalty": 1.0,
+        "seenTokenIds": []
+      },
+      "expected": []
+    }
+  ]
+}
