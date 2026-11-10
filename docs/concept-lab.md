@@ -35,11 +35,17 @@ Qwen2.5-0.5B 与 Mamba-130M 在界面中明确标注为**基座模型，不是�
 测量方式是在每个 prefill 长度上各做一次前向，不再逐 token decode：
 
 1. 创建适配器；
-2. 用重复到目标长度的同一段英文 token 做一次 prefill；
-3. 记录 `cache_bytes` / `kv_bytes` / `linear_state_bytes` / `dtype`；
-4. 立即 `unload()` 并清理 CUDA cache；
-5. 四个模型都按 64/128/256/512 测量；Transformer 类额外测 1024/2048；
-6. RWKV/Mamba 超过 512 的点不实测，图中用虚线并标注“结构上恒定，未实测”。
+2. 对输入 prompt 分词得到 token id 序列；
+3. 目标长度小于序列长度时，截取前 N 个 token；目标长度更大时，循环重复已有
+   token id 直到达到 N 个；不插入 pad token。四个模型使用同一组 token id；
+4. 用这组精确长度的 token id 做一次 prefill；
+5. 记录 `cache_bytes` / `kv_bytes` / `linear_state_bytes` / `dtype`；
+6. 立即 `unload()` 并清理 CUDA cache；
+7. 四个模型都按 64/128/256/512 测量；Transformer 类额外测 1024/2048；
+8. RWKV/Mamba 超过 512 的点不实测，图中用虚线并标注“结构上恒定，未实测”。
+
+例如 prompt `The capital of France is` 的分词结果短于 64，因此所有测量长度都是
+“循环重复后截取”的结果，而不是 pad 填充。
 
 `cache_bytes` 等字段来自 `InternalState` 的拆分定义：
 

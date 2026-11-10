@@ -338,6 +338,9 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
             <button type="button" onClick={() => setLogScale(true)} className={`px-2 py-0.5 rounded border ${logScale ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40' : 'border-slate-700 text-slate-400'}`}>对数</button>
           </span>
         </div>
+        <p className="text-[10px] text-slate-500 leading-relaxed">
+          长度来源：先对输入 prompt 分词；不足目标长度时循环重复已有 token id，超过时截取前 N 个，不插入 pad。四个模型使用同一组 token id。
+        </p>
         {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2">{error}</div>}
         {data && (
           <div className="space-y-3">
