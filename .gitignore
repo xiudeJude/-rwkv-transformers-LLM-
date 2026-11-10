@@ -62,3 +62,8 @@ dist-ssr/
 .DS_Store
 Thumbs.db
 *.zip
+
+# Local submission materials (do not commit large media)
+docs/参赛材料包/
+docs/参赛提交包_*/
+docs/AI对话历史_*/
