@@ -901,7 +901,7 @@ export function App() {
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Transformer (Qwen3.5)</span>
+            <span>Transformer (Qwen3.5 混合)</span>
           </button>
           <button
             onClick={() => handleArchSwitch('rwkv')}
@@ -923,7 +923,7 @@ export function App() {
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span>Mamba (130M)</span>
+            <span>Mamba (130M 基座)</span>
           </button>
           <button
             onClick={handleOpenConceptLab}
@@ -946,10 +946,10 @@ export function App() {
             <span className="font-mono text-sky-300 font-semibold">
               {modelMeta?.model_id ||
                 (modelArch === 'transformer'
-                  ? 'Qwen3.5-0.8B (GGUF)'
+                  ? 'Qwen3.5-0.8B 混合 (GGUF)'
                   : modelArch === 'rwkv'
                     ? 'RWKV7-0.4B (FP16)'
-                    : 'Mamba-130M (FP16)')}
+                    : 'Mamba-130M 基座 (FP16)')}
             </span>
           </div>
 
