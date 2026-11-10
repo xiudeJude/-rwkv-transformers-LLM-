@@ -23,6 +23,35 @@ class AttentionData(BaseModel):
     tokens: List[str]          # token str strings for axis labels
     token_ids: List[int]
 
+class InternalState(BaseModel):
+    """统一内部状态导出结构。
+
+    kind 用于区分状态类型：
+      - "attention": Transformer 注意力权重
+      - "recurrent_state": RWKV 递归状态
+
+    所有适配器都必须填充通用元信息（层数、头数、序列长度、状态字节数），
+    matrix/row/summary/delta 等字段按 kind 选用。
+    """
+    kind: str
+    model_type: str = ""
+    layer: int = 0
+    head: Optional[int] = None
+    num_layers: int = 0
+    num_heads: int = 0
+    seq_len: int = 0
+    step: int = 0
+    state_bytes: int = 0
+    tokens: List[str] = Field(default_factory=list)
+    token_ids: List[int] = Field(default_factory=list)
+    shape: List[int] = Field(default_factory=list)
+    matrix: Optional[Any] = None
+    row: Optional[List[float]] = None
+    summary: Optional[List[float]] = None
+    delta: Optional[List[float]] = None
+    head_norms: Optional[List[float]] = None
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
 class CreateSessionRequest(BaseModel):
     prompt: str = Field(..., description="Initial prompt to prefill")
     layer: int = Field(3, description="Target layer index to monitor")
@@ -50,3 +79,4 @@ class SingleStepInspectResponse(BaseModel):
     attention: AttentionData
     next_token: TokenCandidate
     top_k_candidates: List[TokenCandidate]
+    state: Optional[InternalState] = None
