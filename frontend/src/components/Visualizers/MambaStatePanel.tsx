@@ -102,7 +102,7 @@ export const MambaStatePanel: React.FC<MambaStatePanelProps> = ({
         <div>
           <p className="text-sm text-slate-300 font-medium">Mamba 递归状态面板就绪</p>
           <p className="text-xs text-slate-500 mt-1">
-            点击“流式生成 (WS)”，这里会按统一 InternalState 的 components 展示 conv_state 与 ssm_state。
+            点击“流式生成 (WS)”，这里会按 InternalState 的 components 展示 conv_state 与 ssm_state。
           </p>
           <p className="text-[10px] text-slate-600 mt-2">
             纯 PyTorch 参考路径：无 mamba-ssm / causal-conv1d 加速，生成速度较慢。

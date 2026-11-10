@@ -844,7 +844,7 @@ export function App() {
             <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
               LLM 可解释性交互工坊
               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                P0: 三架构对比 (Transformer / RWKV / Mamba)
+                三架构对比 (Transformer / RWKV / Mamba)
               </span>
             </h1>
             <p className="text-[11px] text-slate-400">
@@ -852,7 +852,7 @@ export function App() {
                 ? 'Full Attention 离屏双缓冲增量绘制 • 60 FPS 平滑渲染 • Log-scale 色谱'
                 : modelArch === 'rwkv'
                   ? 'RWKV-7 隐藏状态瀑布流 • 能量模长演化(Viridis)与单步扰动(Coolwarm) • Level 2 状态探针'
-                  : 'Mamba 递归状态面板 • 统一 InternalState components • conv_state / ssm_state 逐层范数'}
+                  : 'Mamba 递归状态面板 • 由统一 InternalState 驱动 • conv_state / ssm_state 逐层范数'}
             </p>
           </div>
         </div>
