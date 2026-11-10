@@ -244,6 +244,7 @@ class MambaAdapter(ModelAdapter):
                 "token_id": -1,
                 "token_prob": 0.0,
                 "topk_candidates": [],
+                "topk_logits": [],
                 "is_finished": True,
             }
 
@@ -251,6 +252,7 @@ class MambaAdapter(ModelAdapter):
             raise RuntimeError("Session has not executed prefill stage. Call prefill() first.")
 
         logits = state.last_logits[0].clone().float()
+        topk_logits = self.top_logits_payload(logits, k=50)
         if repetition_penalty != 1.0 and len(state.token_ids) > 0:
             for tid in set(state.token_ids):
                 if 0 <= tid < len(logits):
@@ -305,6 +307,7 @@ class MambaAdapter(ModelAdapter):
             "token_id": next_token_id,
             "token_prob": round(sampled_prob, 4),
             "topk_candidates": candidates,
+            "topk_logits": topk_logits,
             "is_finished": state.is_finished,
         }
 

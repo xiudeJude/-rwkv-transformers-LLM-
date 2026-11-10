@@ -252,6 +252,7 @@ class TransformerAdapter(ModelAdapter):
                 "token_id": -1,
                 "token_prob": 0.0,
                 "topk_candidates": [],
+                "topk_logits": [],
                 "attention_slice": None,
                 "is_finished": True
             }
@@ -261,6 +262,7 @@ class TransformerAdapter(ModelAdapter):
 
         # 1. Sample next token from last_logits [1, vocab_size]
         logits = state.last_logits[0].clone().float()
+        topk_logits = self.top_logits_payload(logits, k=50)
 
         # Apply repetition penalty to already seen token IDs to prevent repetitive loops
         if repetition_penalty != 1.0 and len(state.token_ids) > 0:
@@ -349,6 +351,7 @@ class TransformerAdapter(ModelAdapter):
             "token_id": next_token_id,
             "token_prob": round(sampled_prob, 4),
             "topk_candidates": candidates,
+            "topk_logits": topk_logits,
             "attention_slice": {
                 "layer": target_layer,
                 "head": target_head,

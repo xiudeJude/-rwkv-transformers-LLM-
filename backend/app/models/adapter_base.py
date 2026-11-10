@@ -149,6 +149,20 @@ class ModelAdapter(ABC):
         """将 token id 序列解码为文本；默认逐 token 拼接。"""
         return "".join(self.decode_token(token_id) for token_id in token_ids)
 
+    def top_logits_payload(self, logits: torch.Tensor, k: int = 50) -> List[Dict[str, Any]]:
+        """返回当前步原始 logits 的 top-k 统一格式，供概念实验室本地重算。"""
+        flat = logits.reshape(-1).float()
+        k = min(k, int(flat.numel()))
+        values, indices = torch.topk(flat, k=k)
+        return [
+            {
+                "id": int(token_id),
+                "token": self.decode_token(int(token_id)),
+                "logit": round(float(logit), 6),
+            }
+            for logit, token_id in zip(values.tolist(), indices.tolist())
+        ]
+
     # ------------------------------------------------------------------
     # 会话状态与逐步生成
     # ------------------------------------------------------------------

@@ -83,6 +83,8 @@ def test_mamba_prefill_step_export(mamba_adapter):
     )
     assert step["step"] == 1
     assert step["token_id"] >= 0
+    assert len(step["topk_logits"]) == 50
+    assert step["topk_logits"][0]["id"] == step["token_id"]
 
     stepped = mamba_adapter.export_state(state, step=1, layer=0)
     assert stepped.step == 1

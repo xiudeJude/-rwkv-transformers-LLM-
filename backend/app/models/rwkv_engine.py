@@ -172,6 +172,7 @@ class RWKVAdapter(ModelAdapter):
                 "token_id": -1,
                 "token_prob": 0.0,
                 "topk_candidates": [],
+                "topk_logits": [],
                 "state_summary": [0.0] * 16,
                 "delta": [0.0] * 16,
                 "is_finished": True
@@ -182,6 +183,7 @@ class RWKVAdapter(ModelAdapter):
 
         # 1. Sample next token from last_logits [vocab_size]
         logits = state.last_logits.clone().float()
+        topk_logits = self.top_logits_payload(logits, k=50)
 
         # Apply repetition penalty to seen token IDs
         if repetition_penalty != 1.0 and len(state.token_ids) > 0:
@@ -259,6 +261,7 @@ class RWKVAdapter(ModelAdapter):
             "token_id": next_token_id,
             "token_prob": round(sampled_prob, 4),
             "topk_candidates": candidates,
+            "topk_logits": topk_logits,
             "state_summary": curr_summary,
             "delta": delta,
             "layer": target_layer,

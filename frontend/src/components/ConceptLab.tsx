@@ -1,5 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { BookOpen, FlaskConical, Play, Loader2 } from 'lucide-react';
+import {
+  computeDistribution,
+  samplingModeLabels,
+  type LogitItem,
+  type SamplingMode,
+} from '../utils/sampling';
 
 interface ConceptLabProps {
   apiBase: string;
@@ -63,6 +69,16 @@ interface TokenizerResult {
 interface TokenizeResponse {
   text: string;
   models: TokenizerResult[];
+}
+
+interface SampleLogitsResponse {
+  model_type: 'transformer' | 'rwkv' | 'mamba';
+  model_id: string;
+  prompt: string;
+  prompt_tokens: string[];
+  prompt_token_ids: number[];
+  sampled_token_id: number;
+  topk_logits: LogitItem[];
 }
 
 const formatBytes = (bytes: number): string => {
@@ -409,6 +425,146 @@ const ConceptB: React.FC<{ apiBase: string }> = ({ apiBase }) => {
   );
 };
 
+const ConceptC: React.FC<{ apiBase: string }> = ({ apiBase }) => {
+  const [modelType, setModelType] = useState<'transformer' | 'rwkv' | 'mamba'>('mamba');
+  const [prompt, setPrompt] = useState('The capital of France is');
+  const [data, setData] = useState<SampleLogitsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [temperature, setTemperature] = useState(0.8);
+  const [topK, setTopK] = useState(0);
+  const [topP, setTopP] = useState(1.0);
+  const [repetitionPenalty, setRepetitionPenalty] = useState(1.2);
+
+  const load = async () => {
+    if (!prompt.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase}/api/concept/sample-logits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, model_type: modelType }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `加载 logits 失败 (${response.status})`);
+      }
+      setData(await response.json());
+    } catch (err: any) {
+      setError(err.message || '加载 logits 失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const modes: SamplingMode[] = ['raw', 'temperature', 'topK', 'topP', 'repetition', 'combined'];
+  const items = data?.topk_logits ?? [];
+  const params = {
+    temperature,
+    topK,
+    topP,
+    repetitionPenalty,
+    seenTokenIds: data?.prompt_token_ids ?? [],
+  };
+  const distributions = useMemo(
+    () => modes.map((mode) => computeDistribution(items, params, mode)),
+    [items, temperature, topK, topP, repetitionPenalty, data?.prompt_token_ids]
+  );
+
+  return (
+    <ConceptCard
+      index="C"
+      title="采样如何改变概率分布"
+      explanation="同一组真实 logits，经过 Temperature、Top-K、Top-P 与重复惩罚后会变成不同的概率分布。拖动滑块即可本地重算，不需要重新请求模型。"
+      mapping="采样层是三个架构共享的后处理步骤；原始 logits 来自各自适配器 step 的 top-50，而不是注意力权重。"
+    >
+      <div className="space-y-3">
+        <div className="flex gap-2 flex-wrap items-center">
+          <select
+            value={modelType}
+            onChange={(event) => setModelType(event.target.value as 'transformer' | 'rwkv' | 'mamba')}
+            disabled={loading}
+            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="transformer">Transformer</option>
+            <option value="rwkv">RWKV</option>
+            <option value="mamba">Mamba</option>
+          </select>
+          <input
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            disabled={loading}
+            className="flex-1 min-w-[260px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
+            placeholder="English prompt"
+          />
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading || !prompt.trim()}
+            className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center gap-1.5"
+          >
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            {loading ? '加载模型中...' : '加载 logits'}
+          </button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-[11px] text-slate-400">
+          <label>
+            <span className="flex justify-between"><span>Temperature</span><b className="font-mono text-amber-300">{temperature.toFixed(2)}</b></span>
+            <input type="range" min={0.1} max={2} step={0.05} value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} className="w-full accent-amber-500" />
+          </label>
+          <label>
+            <span className="flex justify-between"><span>Top-K（0=关闭）</span><b className="font-mono text-sky-300">{topK}</b></span>
+            <input type="range" min={0} max={50} step={1} value={topK} onChange={(event) => setTopK(Number(event.target.value))} className="w-full accent-sky-500" />
+          </label>
+          <label>
+            <span className="flex justify-between"><span>Top-P</span><b className="font-mono text-emerald-300">{topP.toFixed(2)}</b></span>
+            <input type="range" min={0.1} max={1} step={0.05} value={topP} onChange={(event) => setTopP(Number(event.target.value))} className="w-full accent-emerald-500" />
+          </label>
+          <label>
+            <span className="flex justify-between"><span>重复惩罚</span><b className="font-mono text-rose-300">{repetitionPenalty.toFixed(2)}</b></span>
+            <input type="range" min={1} max={2} step={0.05} value={repetitionPenalty} onChange={(event) => setRepetitionPenalty(Number(event.target.value))} className="w-full accent-rose-500" />
+          </label>
+        </div>
+        {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2">{error}</div>}
+        {data && (
+          <>
+            <div className="text-[10px] text-slate-500 font-mono">
+              {data.model_type} · 已从 {data.model_id} 加载并卸载 · top-50 logits · sampled_token_id={data.sampled_token_id}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+              {modes.map((mode, modeIndex) => {
+                const distribution = distributions[modeIndex];
+                const maxProb = Math.max(...distribution, 1e-9);
+                return (
+                  <div key={mode} className="rounded-lg border border-slate-800 bg-slate-950/70 p-2 space-y-1.5">
+                    <div className="text-[10px] font-mono text-slate-300">{samplingModeLabels[mode]}</div>
+                    {items.slice(0, 7).map((item, index) => (
+                      <div key={item.id} className="space-y-0.5" title={`${item.token} · ${distribution[index].toFixed(6)}`}>
+                        <div className="flex justify-between gap-1 text-[9px] font-mono text-slate-400">
+                          <span className="truncate">{item.token || '∅'}</span>
+                          <span>{distribution[index] < 1e-6 ? '0' : distribution[index].toFixed(4)}</span>
+                        </div>
+                        <div className="h-1.5 rounded bg-slate-800 overflow-hidden">
+                          <div className="h-full rounded bg-cyan-400/80" style={{ width: `${Math.min(100, (distribution[index] / maxProb) * 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-[10px] text-slate-500 leading-relaxed">
+              显示前 7 个候选 token；柱长按该列最大值归一化，标签中为真实概率。重复惩罚只作用于返回的 top-50 候选中出现过的已见 token，
+              用于解释机制，不等同于全词表采样。右侧现有采样控件保持不变。
+            </div>
+          </>
+        )}
+      </div>
+    </ConceptCard>
+  );
+};
+
 export const ConceptLab: React.FC<ConceptLabProps> = ({ apiBase }) => {
   return (
     <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
@@ -433,16 +589,7 @@ export const ConceptLab: React.FC<ConceptLabProps> = ({ apiBase }) => {
 
       <ConceptB apiBase={apiBase} />
 
-      <ConceptCard
-        index="C"
-        title="采样如何改变概率分布"
-        explanation="同一组原始 logits 在 Temperature、Top-K、Top-P、重复惩罚下会变成不同的概率分布。"
-        mapping="采样层是三个架构共享的后处理步骤；原始 logits 来自各自的适配器 step。"
-      >
-        <div className="text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg p-4">
-          采样分布模块将在下一阶段接入（适配器 step 返回 top-50 原始 logits）。
-        </div>
-      </ConceptCard>
+      <ConceptC apiBase={apiBase} />
 
       <div className="flex items-center gap-2 text-[10px] text-slate-600">
         <BookOpen className="w-3.5 h-3.5" />

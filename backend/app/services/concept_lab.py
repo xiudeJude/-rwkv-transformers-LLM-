@@ -287,8 +287,8 @@ def sample_topk_logits(prompt: str, model_type: str) -> Dict[str, Any]:
 
     adapter_cls, model_id = _model_spec(model_type)
     adapter = adapter_cls()
-    try:
-        with _MODEL_LOCK:
+    with _MODEL_LOCK:
+        try:
             adapter.load_model(model_id, device=settings.DEVICE)
             state = adapter.create_state()
             prefill = adapter.prefill(state, prompt, target_layer=0)
@@ -308,10 +308,10 @@ def sample_topk_logits(prompt: str, model_type: str) -> Dict[str, Any]:
                 "sampled_token_id": result["token_id"],
                 "topk_logits": result.get("topk_logits", []),
             }
-    finally:
-        try:
-            adapter.unload()
         finally:
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            try:
+                adapter.unload()
+            finally:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()

@@ -17,6 +17,11 @@ class TokenizeRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=4096)
 
 
+class SampleRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4096)
+    model_type: str = Field(..., pattern="^(transformer|rwkv|mamba)$")
+
+
 @router.post("/memory-growth")
 async def memory_growth(req: MemoryGrowthRequest):
     try:
@@ -37,3 +42,15 @@ async def tokenize(req: TokenizeRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Tokenization comparison failed: {exc}")
+
+
+@router.post("/sample-logits")
+async def sample_logits(req: SampleRequest):
+    try:
+        return await asyncio.to_thread(
+            concept_lab.sample_topk_logits, req.prompt, req.model_type
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Sample logits failed: {exc}")
