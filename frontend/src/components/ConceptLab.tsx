@@ -166,6 +166,34 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
     return value;
   });
 
+  const theoryModel = available.find(
+    (model) => model.theoretical?.available && (model.theoretical.lengths?.length ?? 0) > 0
+  );
+  const theoryLengths = theoryModel?.theoretical?.lengths ?? [];
+  const theoryValues = theoryModel?.theoretical?.values ?? [];
+  const theoryIndex = theoryLengths.findIndex((length) => length > 0);
+  const kvBytesPerToken = theoryIndex >= 0 ? theoryValues[theoryIndex] / theoryLengths[theoryIndex] : 0;
+  const crosspoints = kvBytesPerToken > 0
+    ? available
+        .filter((model) => model.model_type === 'mamba' || model.model_type === 'rwkv')
+        .map((model) => {
+          const cacheBytes = model.measurements[0]?.cache_bytes ?? 0;
+          const length = cacheBytes / kvBytesPerToken;
+          const measuredMax = Math.max(
+            ...model.measurements.filter((item) => item.measured).map((item) => item.length),
+            0
+          );
+          const extrapolated = length > measuredMax;
+          return {
+            modelType: model.model_type,
+            length,
+            label: `${model.model_type === 'mamba' ? 'Mamba' : 'RWKV'} 交叉点 ≈ ${Math.round(length)} token${extrapolated ? '（理论推算，超出实测范围）' : ''}`,
+            extrapolated,
+          };
+        })
+        .filter((point) => Number.isFinite(point.length) && point.length > 0 && point.length <= maxLength)
+    : [];
+
   return (
     <div className="space-y-2">
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto rounded-lg bg-slate-950/80 border border-slate-800">
@@ -182,6 +210,19 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
           <text key={length} x={x(length)} y={height - padBottom + 16} textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
             {length}
           </text>
+        ))}
+        {crosspoints.map((point) => (
+          <line
+            key={`guide-${point.modelType}`}
+            x1={x(point.length)}
+            x2={x(point.length)}
+            y1={padTop}
+            y2={height - padBottom}
+            stroke="#94a3b8"
+            strokeWidth="1"
+            strokeDasharray="3 4"
+            opacity="0.45"
+          />
         ))}
         {available.map((model) => {
           const measured = model.measurements.filter((item) => item.measured);
@@ -236,6 +277,18 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
             </g>
           );
         })}
+        {crosspoints.map((point, index) => (
+          <text
+            key={`label-${point.modelType}`}
+            x={x(point.length) + 4}
+            y={padTop + 12 + index * 14}
+            fill={point.extrapolated ? '#fbbf24' : '#cbd5e1'}
+            fontSize="9"
+            fontFamily="ui-monospace, monospace"
+          >
+            {point.label}
+          </text>
+        ))}
         <text x={width / 2} y={height - 6} textAnchor="middle" fill="#64748b" fontSize="10">prefill length (tokens)</text>
         <text x={12} y={padTop} fill="#64748b" fontSize="10" transform={`rotate(-90 12 ${padTop})`}>cache_bytes</text>
       </svg>
