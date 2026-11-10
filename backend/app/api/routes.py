@@ -48,6 +48,26 @@ def _dump_state(state: InternalState) -> Dict[str, Any]:
     """统一状态对象 -> JSON 友好的 dict。"""
     return state.model_dump()
 
+
+def release_global_engines():
+    """释放在架构页面缓存过的全局引擎，供概念实验室顺序加载模型前调用。"""
+    global _engine, _rwkv_engine, _mamba_engine
+    for engine in (_engine, _rwkv_engine, _mamba_engine):
+        if engine is not None:
+            try:
+                engine.unload()
+            except Exception as exc:
+                print(f"[ModelPool] Failed to unload global engine: {exc}")
+    _engine = None
+    _rwkv_engine = None
+    _mamba_engine = None
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
 @router.get("/health")
 async def health():
     return {"status": "ok", "app": settings.APP_NAME}

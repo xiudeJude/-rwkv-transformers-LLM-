@@ -25,6 +25,9 @@ class SampleRequest(BaseModel):
 @router.post("/memory-growth")
 async def memory_growth(req: MemoryGrowthRequest):
     try:
+        from .routes import release_global_engines
+
+        release_global_engines()
         return await asyncio.to_thread(
             concept_lab.run_memory_growth, req.prompt, req.max_tokens
         )
@@ -47,6 +50,9 @@ async def tokenize(req: TokenizeRequest):
 @router.post("/sample-logits")
 async def sample_logits(req: SampleRequest):
     try:
+        from .routes import release_global_engines
+
+        release_global_engines()
         return await asyncio.to_thread(
             concept_lab.sample_topk_logits, req.prompt, req.model_type
         )

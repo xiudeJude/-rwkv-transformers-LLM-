@@ -154,6 +154,14 @@ export function App() {
     }
   };
 
+  const handleOpenConceptLab = () => {
+    // 概念实验室会顺序加载模型；先释放在架构页面残留的会话，避免显存重叠。
+    closeActiveSession(activeSessionId, modelArch);
+    setActiveSessionId(null);
+    setIsStreaming(false);
+    setShowConceptLab(true);
+  };
+
   // Quick preset prompts: each architecture has a Chinese and English example.
   const presets = [
     {
@@ -918,7 +926,7 @@ export function App() {
             <span>Mamba (130M)</span>
           </button>
           <button
-            onClick={() => setShowConceptLab(true)}
+            onClick={handleOpenConceptLab}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
               showConceptLab
                 ? 'bg-gradient-to-r from-amber-600 to-rose-600 text-white shadow-md shadow-amber-600/30'

@@ -47,7 +47,7 @@ def _describe_series(values: List[int]) -> str:
     low, high = min(values), max(values)
     span = high - low
     base = max(1, high)
-    if span <= base * 0.01:
+    if span <= base * 0.001:
         shape = "基本持平"
     elif end > start:
         shape = "整体上升"
