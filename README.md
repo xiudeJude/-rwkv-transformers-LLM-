@@ -13,6 +13,7 @@
 | **Transformer 因果注意力视图** | 全局 Softmax 注意力 | Prefill 基底方阵渲染 + Decode 增量单行生长，Log-scale 色标定标，动态下三角注意力稀疏度 |
 | **RWKV-7 隐状态演化瀑布图** | 循环隐状态衰减与注能 | 左右双色带对称对照：色带 A（Viridis 绝对模长）+ 色带 B（Coolwarm $\mathbf{\Delta}_t$ 扰动差分），分层独立定标 |
 | **Level 2 状态探针模态窗** | 微观权重矩阵下钻 | 点击任意历史步，以 < 10ms 延迟回溯单头 $64 \times 64$ 原始隐状态张量，查看 4,096 个权重热力分布 |
+| **Mamba 递归状态面板** | 统一 `recurrent_state` 组件 | 按 `meta.components` 展示 `conv_state` / `ssm_state` 的 shape、dtype、字节数与逐层范数；不伪造注意力或 RWKV head |
 
 ![Transformer 因果注意力热力图](docs/screenshots/01-transformer-attention.png)
 *Transformer 视图：50 步 Decode 增量热力图，第 3 层第 0 头，Log-scale 色标*
@@ -119,6 +120,7 @@ cp backend/.env.example backend/.env
 # 相对于 backend/ 目录
 DEFAULT_TRANSFORMER=models/Qwen3.5-0.8B-GGUF
 DEFAULT_RWKV=models/rwkv7-g1d-0.4b-20260210-ctx8192.pth
+DEFAULT_MAMBA=state-spaces/mamba-130m-hf
 DEVICE=cuda
 HF_ENDPOINT=https://hf-mirror.com
 ```
@@ -161,6 +163,7 @@ pytest -q
 注意事项：
 
 - 多数测试会加载 `backend/.env` 中配置的真实模型，请先完成上面的模型下载与环境变量配置。
+- `test_mamba_adapter.py` 在 `DEFAULT_MAMBA` 权重不可用时会自动 skip，不会阻断无模型机器上的快速测试。
 - `test_concurrency_attention.py`、`test_incremental_attention_stream.py`、`test_rwkv_stream_and_state.py` 会访问 `http://127.0.0.1:8000`，运行前需先启动后端服务（例如在 `backend` 目录执行 `python main.py`）。
 - 只运行不依赖外部服务的快速测试：
   ```bash
@@ -174,7 +177,7 @@ pytest -q
 
 ## 📦 模型下载与存放指引
 
-本项目所需的两个模型权重均来源于官方公开经过实测验证的 Hugging Face 仓库。请下载并将权重放置于 `backend/models/` 目录下：
+本项目所需的模型权重均来源于官方公开经过实测验证的 Hugging Face 仓库。请下载并将权重放置于 `backend/models/` 目录下：
 
 ### 1. Transformer 架构模型：`Qwen3.5-0.8B-GGUF`
 * **模型官方来源**：[`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF)
@@ -192,6 +195,23 @@ pytest -q
 * **命令行下载**：
   ```bash
   huggingface-cli download BlinkDL/rwkv7-g1 rwkv7-g1d-0.4b-20260210-ctx8192.pth --local-dir backend/models
+  ```
+
+### 3. Mamba-130M 基座模型：`state-spaces/mamba-130m-hf`
+* **模型官方来源**：[`state-spaces/mamba-130m-hf`](https://huggingface.co/state-spaces/mamba-130m-hf)
+* **模型性质**：**基座模型（base model），不是对话/指令微调模型**。它适合观察 Mamba 递归状态和英文续写，不应按聊天助手效果评估。
+* **默认模型 ID**：`state-spaces/mamba-130m-hf`（`transformers` 会自动下载到 Hugging Face 缓存）
+* **可选本地路径**：`backend/models/mamba-130m-hf`
+* **命令行下载**：
+  ```bash
+  huggingface-cli download state-spaces/mamba-130m-hf --local-dir backend/models/mamba-130m-hf
+  ```
+* **实测资源**：fp16 加载约 246 MiB 显存；24 层状态为 `conv_state [1, 1536, 4]`（fp16）与 `ssm_state [1, 1536, 16]`（float32），`state_bytes` 约 2.53 MiB，与序列长度无关。
+* **运行限制**：未安装 `mamba-ssm` / `causal-conv1d` 时使用纯 PyTorch 参考路径，速度较慢；当前限制 prompt ≤ 512 tokens、单次生成 ≤ 128 tokens。
+* **配置项**：
+  ```ini
+  DEFAULT_MAMBA=state-spaces/mamba-130m-hf
+  MAMBA_MODEL_TYPE=mamba
   ```
 
 > **国内下载加速提示**：

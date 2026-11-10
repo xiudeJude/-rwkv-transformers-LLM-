@@ -159,15 +159,16 @@ RWKV_MODEL_TYPE=rwkv         # RWKV 路由使用
 ```
 
 路由在启动时通过 `create_adapter(settings.MODEL_TYPE)` /
-`create_adapter(settings.RWKV_MODEL_TYPE)` 获取适配器，而不是硬编码类名。
+`create_adapter(settings.RWKV_MODEL_TYPE)` / `create_adapter(settings.MAMBA_MODEL_TYPE)`
+获取适配器，而不是硬编码类名。
 注意：适配器模块必须被导入后才会执行 `@register_adapter`，`routes.py` 已经
-在顶部导入两个适配器模块。
+在顶部导入三个适配器模块。
 
-## 5. 新增一个模型
+## 5. 新增一个模型（通用步骤）
 
-以新增 Mamba 为例：
+下面用最小骨架说明注册步骤；Mamba 的完整真实案例见第 6 节。
 
-1. 新建 `backend/app/models/mamba_adapter.py`：
+1. 新建适配器模块，例如 `backend/app/models/my_adapter.py`：
 
 ```python
 from .adapter_base import ModelAdapter
@@ -175,8 +176,8 @@ from .adapter_registry import register_adapter
 from ..core.schemas import InternalState, ModelMetadata
 
 
-@register_adapter("mamba")
-class MambaAdapter(ModelAdapter):
+@register_adapter("my-model")
+class MyAdapter(ModelAdapter):
     def load_model(self, model_name_or_path, device=None):
         ...
 
@@ -193,7 +194,7 @@ class MambaAdapter(ModelAdapter):
         ...
 
     def create_state(self):
-        return MambaSessionState()
+        return MySessionState()
 
     def prefill(self, state, prompt, target_layer=0, target_head=0):
         ...
@@ -206,7 +207,7 @@ class MambaAdapter(ModelAdapter):
                      include_matrix=True):
         return InternalState(
             kind="recurrent_state",
-            model_type="mamba",
+            model_type="my-model",
             layer=layer,
             head=head,
             num_layers=self.num_layers,
@@ -217,7 +218,7 @@ class MambaAdapter(ModelAdapter):
             tokens=...,
             token_ids=...,
             shape=...,
-            matrix=...,
+            matrix=None,
             summary=...,
             delta=...,
         )
@@ -228,12 +229,90 @@ class MambaAdapter(ModelAdapter):
 
 2. 在 `backend/app/api/routes.py` 顶部导入该模块（触发注册），或把导入放入
    `backend/app/models/__init__.py`。
-3. 在 `.env` 中把对应槽位的 `MODEL_TYPE` / `RWKV_MODEL_TYPE` 改成 `mamba`，
-   并把 `DEFAULT_TRANSFORMER` / `DEFAULT_RWKV` 指向该模型权重。
-4. 若前端需要新的展示形式，只需消费 `InternalState.kind` 与对应 payload；
+3. 在 `.env` 中为对应槽位配置模型类型与权重路径，例如
+   `MODEL_TYPE=my-model`、`RWKV_MODEL_TYPE=my-model` 或
+   `MAMBA_MODEL_TYPE=my-model`，并同步配置对应的 `DEFAULT_*` 权重路径。
+4. 若前端需要新的展示形式，只需消费 `InternalState.kind` 与 `meta`/组件 payload；
    不再新增后端专用响应字段。
 
-## 6. 兼容性与行为保证
+## 6. 新增递归类模型：Mamba 案例
+
+`backend/app/models/mamba_engine.py` 已经实现并注册了 `MambaAdapter`，
+模型类型名为 `"mamba"`。这个案例验证了 `kind="recurrent_state"` 抽象不止适用于
+RWKV：Mamba 没有注意力 head，状态形状也与 RWKV 的 `[16, 64, 64]` 完全不同，
+但复用同一个 `ModelAdapter`、`InferenceSession` 和前端状态面板。
+
+### 6.1 Mamba 状态映射
+
+- `MambaAdapter` 不伪造注意力：`num_heads=0`、`head=None`、`matrix=None`。
+- `transformers` 的 Mamba 缓存是 `DynamicCache`，逐层包含：
+  - `conv_states[0]`：卷积状态，形状 `[1, 1536, 4]`，fp16；
+  - `recurrent_states[0]`：SSM 状态，形状 `[1, 1536, 16]`，float32。
+- 适配器把这些状态放进 `InternalState.meta["components"]`，每个组件包含
+  `name`、`shape`、`dtype`、`bytes`、`layer_norms`（逐层 Frobenius 范数摘要）：
+
+```json
+{
+  "kind": "recurrent_state",
+  "model_type": "mamba",
+  "layer": 0,
+  "head": null,
+  "num_layers": 24,
+  "num_heads": 0,
+  "seq_len": 5,
+  "step": 0,
+  "state_bytes": 2654208,
+  "matrix": null,
+  "meta": {
+    "components": [
+      {
+        "name": "conv_state",
+        "shape": [1, 1536, 4],
+        "dtype": "float16",
+        "bytes": 294912,
+        "layer_norms": ["...24 个浮点数..."]
+      },
+      {
+        "name": "ssm_state",
+        "shape": [1, 1536, 16],
+        "dtype": "float32",
+        "bytes": 2359296,
+        "layer_norms": ["...24 个浮点数..."]
+      }
+    ]
+  }
+}
+```
+
+`state_bytes` 是各组件的张量字节数之和，与 prompt 长度、已生成 token 数无关。
+前端 `MambaStatePanel` 只读取 `InternalState.kind` 和
+`meta.components`，按组件通用渲染，不写死 Mamba 的层数、shape 或 dtype。
+
+### 6.2 配置与限制
+
+```dotenv
+DEFAULT_MAMBA=state-spaces/mamba-130m-hf
+MAMBA_MODEL_TYPE=mamba
+```
+
+`state-spaces/mamba-130m-hf` 是**基座模型，不是对话/指令微调模型**；它适合
+观察状态和生成续写，不应按聊天助手效果评估。
+
+当前机器未安装 `mamba-ssm` / `causal-conv1d` 时，`transformers` 会回退到纯
+PyTorch reference 实现。为了保持交互可用，Mamba 路由限制：
+
+- prompt 最多 512 tokens；
+- 单次 WebSocket 生成最多 128 个新 token。
+
+### 6.3 新增模型验证清单
+
+1. 适配器能通过 `load_model` 加载 fp16 权重；
+2. `prefill` 与 `step` 能返回 logits 和模型私有 cache；
+3. `export_state` 返回统一 `InternalState`，并正确填充通用元信息；
+4. `state_bytes` 在不同 prompt 长度下保持一致；
+5. 前端只消费统一结构，未写死模型名称。
+
+## 7. 兼容性与行为保证
 
 - `TransformerEngine` / `RWKVEngine` 保留为适配器别名。
 - `InferenceSession` / `RWKVSession` 保留原类名与公开方法：
