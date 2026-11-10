@@ -201,7 +201,17 @@ def run_memory_growth(prompt: str, max_tokens: int) -> Dict[str, Any]:
 
 
 def _tokenize_with_hf(model_type: str, model_id: str, text: str) -> Dict[str, Any]:
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    load_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    tokenizer_path = model_id
+    if model_type == "transformer":
+        # GGUF 目录需要显式传入 gguf_file，AutoTokenizer 才能找到 tokenizer。
+        from ..models.transformer import resolve_model_path_and_gguf
+
+        tokenizer_path, gguf_file = resolve_model_path_and_gguf(model_id)
+        if gguf_file:
+            load_kwargs["gguf_file"] = gguf_file
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **load_kwargs)
     ids = tokenizer(text, add_special_tokens=False)["input_ids"]
     tokens = []
     for token_id in ids:

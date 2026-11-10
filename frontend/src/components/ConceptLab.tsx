@@ -43,6 +43,28 @@ interface GrowthResponse {
   models: GrowModel[];
 }
 
+interface TokenItem {
+  text: string;
+  id: number;
+  bytes: number;
+}
+
+interface TokenizerResult {
+  model_type: string;
+  model_id: string;
+  available: boolean;
+  tokenizer?: string;
+  tokens: TokenItem[];
+  token_count: number;
+  byte_count: number;
+  error?: string;
+}
+
+interface TokenizeResponse {
+  text: string;
+  models: TokenizerResult[];
+}
+
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
@@ -266,6 +288,127 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
   );
 };
 
+const ConceptB: React.FC<{ apiBase: string }> = ({ apiBase }) => {
+  const [text, setText] = useState('The quick brown fox jumps over the lazy dog.');
+  const [data, setData] = useState<TokenizeResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (value = text) => {
+    if (!value.trim()) return;
+    setText(value);
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase}/api/concept/tokenize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: value }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `分词失败 (${response.status})`);
+      }
+      setData(await response.json());
+    } catch (err: any) {
+      setError(err.message || '分词请求失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const tokenStyle = (id: number) => ({
+    backgroundColor: `hsl(${Math.abs(id * 37) % 360} 62% 34%)`,
+  });
+
+  return (
+    <ConceptCard
+      index="B"
+      title="分词对比"
+      explanation="同一句话进入不同 tokenizer 后，会变成完全不同的 token 序列；这会影响上下文长度、显存与生成成本。"
+      mapping="Transformer：Qwen tokenizer；RWKV：rwkv_vocab_v20230424；Mamba：GPTNeoX tokenizer。"
+    >
+      <div className="space-y-3">
+        <div className="flex gap-2 flex-wrap">
+          <input
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') run();
+            }}
+            disabled={loading}
+            className="flex-1 min-w-[260px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
+            placeholder="输入中文或英文句子"
+          />
+          <button
+            type="button"
+            onClick={() => run()}
+            disabled={loading || !text.trim()}
+            className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center gap-1.5"
+          >
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            {loading ? '分词中...' : '对比分词'}
+          </button>
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+          <span>示例：</span>
+          <button
+            type="button"
+            onClick={() => run('注意力机制让大语言模型能够捕捉长距离语义依赖关系。')}
+            className="px-2 py-1 rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+          >
+            中文
+          </button>
+          <button
+            type="button"
+            onClick={() => run('Attention mechanisms allow language models to capture long-range dependencies.')}
+            className="px-2 py-1 rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+          >
+            English
+          </button>
+          <span className="ml-auto">只加载 tokenizer，不加载模型权重</span>
+        </div>
+        {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2">{error}</div>}
+        {data && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            {data.models.map((model) => (
+              <div key={model.model_type} className="rounded-lg border border-slate-800 bg-slate-950/70 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-xs font-bold text-slate-200">{model.model_type}</span>
+                  <span className="text-[10px] font-mono text-slate-500">{model.tokenizer || '—'}</span>
+                </div>
+                {model.available ? (
+                  <>
+                    <div className="flex flex-wrap gap-1">
+                      {model.tokens.map((token, index) => (
+                        <span
+                          key={`${token.id}-${index}`}
+                          className="rounded px-1.5 py-1 text-[11px] text-white font-mono leading-tight border border-white/10"
+                          style={tokenStyle(token.id)}
+                          title={`id=${token.id}, bytes=${token.bytes}`}
+                        >
+                          <span className="whitespace-pre">{token.text || '∅'}</span>
+                          <span className="block text-[8px] opacity-70 leading-none mt-0.5">{token.id}</span>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                      <span>{model.token_count} tokens</span>
+                      <span>{model.byte_count} bytes</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-[11px] text-rose-300/80">{model.error}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </ConceptCard>
+  );
+};
+
 export const ConceptLab: React.FC<ConceptLabProps> = ({ apiBase }) => {
   return (
     <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
@@ -288,16 +431,7 @@ export const ConceptLab: React.FC<ConceptLabProps> = ({ apiBase }) => {
 
       <ConceptA apiBase={apiBase} />
 
-      <ConceptCard
-        index="B"
-        title="分词对比"
-        explanation="同一句话进入不同 tokenizer 后，会变成完全不同的 token 序列；这会影响上下文长度、显存与生成成本。"
-        mapping="Transformer：Qwen tokenizer；RWKV：rwkv_vocab_v20230424；Mamba：GPTNeoX tokenizer。"
-      >
-        <div className="text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg p-4">
-          分词对比模块将在下一阶段接入（只加载 tokenizer，不加载模型权重）。
-        </div>
-      </ConceptCard>
+      <ConceptB apiBase={apiBase} />
 
       <ConceptCard
         index="C"
