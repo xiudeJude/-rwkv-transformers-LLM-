@@ -935,30 +935,27 @@ export function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* Top Navbar */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 via-purple-500 to-sky-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-4 xl:px-6 py-3 flex items-center justify-between gap-4 flex-nowrap">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 shrink-0 rounded-lg bg-gradient-to-br from-indigo-500 via-purple-500 to-sky-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
             <Sparkles className="w-5 h-5 text-white" />
           </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
+          <div className="min-w-0">
+            <h1 className="text-base font-bold tracking-tight text-white whitespace-nowrap">
               LLM 可解释性交互工坊
-              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                三架构对比 (Transformer / RWKV / Mamba)
-              </span>
             </h1>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-slate-400 whitespace-nowrap">
               {modelArch === 'transformer'
-                ? 'Full Attention 离屏双缓冲增量绘制 • 60 FPS 平滑渲染 • Log-scale 色谱'
+                ? 'Full Attention · Canvas · 60 FPS'
                 : modelArch === 'rwkv'
-                  ? 'RWKV-7 隐藏状态瀑布流 • 能量模长演化(Viridis)与单步扰动(Coolwarm) • Level 2 状态探针'
-                  : 'Mamba 递归状态面板 • 由统一 InternalState 驱动 • conv_state / ssm_state 逐层范数'}
+                  ? 'WKV 状态演化 · Level 2 探针'
+                  : '递归状态 · conv_state / ssm_state'}
             </p>
           </div>
         </div>
 
         {/* Architecture Switcher Tabs */}
-        <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
+        <div className="flex items-center shrink-0 bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
           <button
             onClick={() => handleArchSwitch('transformer')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
@@ -968,7 +965,7 @@ export function App() {
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Transformer (Qwen3.5 混合)</span>
+            <span className="whitespace-nowrap">Qwen3.5 混合</span>
           </button>
           <button
             onClick={() => handleArchSwitch('rwkv')}
@@ -979,7 +976,7 @@ export function App() {
             }`}
           >
             <Activity className="w-3.5 h-3.5" />
-            <span>RWKV-7 (Goose 0.4B)</span>
+            <span className="whitespace-nowrap">RWKV-7</span>
           </button>
           <button
             onClick={() => handleArchSwitch('mamba')}
@@ -990,7 +987,7 @@ export function App() {
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span>Mamba (130M 基座)</span>
+            <span className="whitespace-nowrap">Mamba</span>
           </button>
           <button
             onClick={handleOpenConceptLab}
@@ -1001,12 +998,12 @@ export function App() {
             }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            <span>概念实验室</span>
+            <span className="whitespace-nowrap">概念实验室</span>
           </button>
         </div>
 
         {/* Model Meta Badge */}
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex items-center gap-3 text-xs shrink-0">
           <div
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800"
             title={
