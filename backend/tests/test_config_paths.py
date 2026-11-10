@@ -17,14 +17,18 @@ def test_relative_model_paths_resolve_under_backend_root(monkeypatch, tmp_path):
     transformer_path.mkdir()
     rwkv_path = models_dir / "rwkv-model"
     rwkv_path.with_suffix(".pth").write_bytes(b"")
+    mamba_path = models_dir / "mamba-model"
+    mamba_path.mkdir()
 
     monkeypatch.setattr(config_module, "BACKEND_DIR", str(tmp_path))
     monkeypatch.setenv("DEFAULT_TRANSFORMER", "models/transformer-model")
     monkeypatch.setenv("DEFAULT_RWKV", "models/rwkv-model")
+    monkeypatch.setenv("DEFAULT_MAMBA", "models/mamba-model")
 
     settings = Settings()
     assert settings.DEFAULT_TRANSFORMER == str(transformer_path)
     assert settings.DEFAULT_RWKV == str(rwkv_path)
+    assert settings.DEFAULT_MAMBA == str(mamba_path)
     assert not settings.DEFAULT_TRANSFORMER.startswith(("D:/", "D:\\"))
 
 
