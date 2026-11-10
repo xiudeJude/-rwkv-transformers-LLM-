@@ -41,7 +41,12 @@ class InternalState(BaseModel):
     num_heads: int = 0
     seq_len: int = 0
     step: int = 0
+    # state_bytes 保持兼容，等于 cache_bytes + viz_history_bytes。
     state_bytes: int = 0
+    # 推理本身必需的缓存（KV Cache、递归状态、Mamba conv/ssm 状态）。
+    cache_bytes: int = 0
+    # 仅为了可视化额外保存的历史（注意力历史、RWKV history_states 等）。
+    viz_history_bytes: int = 0
     tokens: List[str] = Field(default_factory=list)
     token_ids: List[int] = Field(default_factory=list)
     shape: List[int] = Field(default_factory=list)

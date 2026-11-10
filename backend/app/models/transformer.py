@@ -422,12 +422,19 @@ class TransformerAdapter(ModelAdapter):
             "full_matrix": matrix
         }
 
-    def _state_bytes(self, state: TransformerAdapterState) -> int:
+    def _cache_bytes(self, state: TransformerAdapterState) -> int:
+        """推理必需的 KV Cache（混合架构中可能还含线性层状态）实际字节数。"""
+        return estimate_state_bytes(state.past_key_values)
+
+    def _viz_history_bytes(self, state: TransformerAdapterState) -> int:
+        """仅为可视化额外保存的 CPU 注意力历史字节数。"""
         return (
-            estimate_state_bytes(state.past_key_values)
-            + estimate_state_bytes(state.prefill_attentions)
+            estimate_state_bytes(state.prefill_attentions)
             + estimate_state_bytes(state.step_attentions)
         )
+
+    def _state_bytes(self, state: TransformerAdapterState) -> int:
+        return self._cache_bytes(state) + self._viz_history_bytes(state)
 
     def export_state(
         self,
@@ -491,6 +498,8 @@ class TransformerAdapter(ModelAdapter):
             seq_len=seq_len,
             step=target_step,
             state_bytes=self._state_bytes(state),
+            cache_bytes=self._cache_bytes(state),
+            viz_history_bytes=self._viz_history_bytes(state),
             tokens=tokens,
             token_ids=state.token_ids[:seq_len],
             shape=shape,
@@ -587,6 +596,8 @@ class TransformerAdapter(ModelAdapter):
             seq_len=len(tokens),
             step=0,
             state_bytes=estimate_state_bytes(matrix_list),
+            cache_bytes=0,
+            viz_history_bytes=estimate_state_bytes(matrix_list),
             tokens=tokens,
             token_ids=token_ids,
             shape=[len(matrix_list), len(matrix_list[0]) if matrix_list else 0],

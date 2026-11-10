@@ -48,6 +48,8 @@ export interface InternalState {
   seq_len: number;
   step: number;
   state_bytes: number;
+  cache_bytes: number;
+  viz_history_bytes: number;
   tokens: string[];
   token_ids: number[];
   shape: number[];

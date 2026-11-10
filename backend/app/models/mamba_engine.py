@@ -340,6 +340,7 @@ class MambaAdapter(ModelAdapter):
 
         components = snapshot["components"]
         seq_len = int(snapshot.get("seq_len", len(state.tokens)))
+        cache_bytes = int(snapshot["state_bytes"])
         return InternalState(
             kind="recurrent_state",
             model_type="mamba",
@@ -349,7 +350,9 @@ class MambaAdapter(ModelAdapter):
             num_heads=0,
             seq_len=seq_len,
             step=target_step,
-            state_bytes=int(snapshot["state_bytes"]),
+            state_bytes=cache_bytes,
+            cache_bytes=cache_bytes,
+            viz_history_bytes=0,
             tokens=state.tokens[:seq_len],
             token_ids=state.token_ids[:seq_len],
             shape=[self.num_layers, len(components)],

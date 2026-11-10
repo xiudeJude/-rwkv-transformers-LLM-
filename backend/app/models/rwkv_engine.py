@@ -341,12 +341,15 @@ class RWKVAdapter(ModelAdapter):
             selected = wkv_state_tensor[head]
             matrix = selected.tolist() if include_matrix else None
             shape = list(selected.shape)  # [64, 64]
-            state_bytes = estimate_state_bytes(selected)
         else:
             selected = wkv_state_tensor
             matrix = selected.tolist() if include_matrix else None
             shape = list(selected.shape)  # [16, 64, 64]
-            state_bytes = estimate_state_bytes(selected)
+
+        cache_bytes = estimate_state_bytes(state.current_state)
+        history_bytes = estimate_state_bytes(state.history_states)
+        viz_history_bytes = max(0, history_bytes - cache_bytes)
+        state_bytes = cache_bytes + viz_history_bytes
 
         if target_step > 0:
             prev_summary = self._compute_layer_summary(state.history_states[target_step - 1], layer)
@@ -364,6 +367,8 @@ class RWKVAdapter(ModelAdapter):
             seq_len=len(state.tokens),
             step=target_step,
             state_bytes=state_bytes,
+            cache_bytes=cache_bytes,
+            viz_history_bytes=viz_history_bytes,
             tokens=state.tokens,
             token_ids=state.token_ids,
             shape=shape,
@@ -408,6 +413,7 @@ class RWKVAdapter(ModelAdapter):
         # Frobenius norm for layer head
         wkv_state = state[layer * 3 + 1]
         norm = float(torch.norm(wkv_state[head], p='fro').item())
+        cache_bytes = estimate_state_bytes(state)
 
         state_export = InternalState(
             kind="recurrent_state",
@@ -418,7 +424,9 @@ class RWKVAdapter(ModelAdapter):
             num_heads=self.num_heads,
             seq_len=len(token_ids),
             step=0,
-            state_bytes=estimate_state_bytes(wkv_state[head]),
+            state_bytes=cache_bytes,
+            cache_bytes=cache_bytes,
+            viz_history_bytes=0,
             tokens=tokenized["tokens"],
             token_ids=token_ids,
             shape=[1, 1],

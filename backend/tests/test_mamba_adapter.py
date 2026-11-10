@@ -61,6 +61,9 @@ def test_mamba_prefill_step_export(mamba_adapter):
     assert prefilled.head is None
     assert prefilled.matrix is None
     assert prefilled.state_bytes > 0
+    assert prefilled.cache_bytes > 0
+    assert prefilled.viz_history_bytes == 0
+    assert prefilled.state_bytes == prefilled.cache_bytes + prefilled.viz_history_bytes
     assert prefilled.num_layers > 0
 
     components = _component_map(prefilled)
