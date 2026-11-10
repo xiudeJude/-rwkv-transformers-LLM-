@@ -504,6 +504,9 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
                 );
               })}
             </div>
+            <p className="text-[10px] text-amber-200/80 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2 leading-relaxed">
+              图中是缓存张量字节数，不含模型权重；例如 Qwen2.5-0.5B 权重约 988 MB，而 2048 token 时 KV 为 24 MiB。
+            </p>
             <div className="text-[10px] text-slate-500 leading-relaxed space-y-1">
               <p>
                 图中粗线是实际 kv_bytes，细白虚线是理论 KV；两者重合表示逐点相等。Qwen3.5 的 kv_bytes 与 Qwen2.5 的总缓存数值相同，是因为 config 中
