@@ -234,33 +234,40 @@ export function App() {
     setShowConceptLab(true);
   };
 
-  // Quick preset prompts: each architecture has a Chinese and English example.
-  const presets = [
-    {
-      label: 'Transformer 中文',
-      text: '注意力机制让大语言模型能够精确捕捉长距离语义依赖关系',
-    },
-    {
-      label: 'Transformer English',
-      text: 'Attention mechanisms allow large language models to capture long-range semantic dependencies.',
-    },
-    {
-      label: 'RWKV 中文',
-      text: 'RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度',
-    },
-    {
-      label: 'RWKV English',
-      text: 'RWKV replaces quadratic attention with linear recurrent state updates for efficient sequence modeling.',
-    },
-    {
-      label: 'Mamba 中文',
-      text: 'Mamba通过选择性状态空间模型实现线性复杂度的长序列建模',
-    },
-    {
-      label: 'Mamba English',
-      text: 'Mamba uses selective state space models for efficient long-sequence modeling.',
-    },
-  ];
+  // Quick preset prompts: only the current architecture's two examples are shown.
+  const presetsByArch: Record<ModelArch, Array<{ label: string; text: string }>> = {
+    transformer: [
+      {
+        label: '中文',
+        text: '注意力机制让大语言模型能够精确捕捉长距离语义依赖关系',
+      },
+      {
+        label: 'English',
+        text: 'Attention mechanisms allow large language models to capture long-range semantic dependencies.',
+      },
+    ],
+    rwkv: [
+      {
+        label: '中文',
+        text: 'RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度',
+      },
+      {
+        label: 'English',
+        text: 'RWKV replaces quadratic attention with linear recurrent state updates for efficient sequence modeling.',
+      },
+    ],
+    mamba: [
+      {
+        label: '中文',
+        text: 'Mamba通过选择性状态空间模型实现线性复杂度的长序列建模',
+      },
+      {
+        label: 'English',
+        text: 'Mamba uses selective state space models for efficient long-sequence modeling.',
+      },
+    ],
+  };
+  const presets = presetsByArch[modelArch];
 
   // Model metadata is loaded lazily when a tab first runs generation or inspection.
   useEffect(() => {
