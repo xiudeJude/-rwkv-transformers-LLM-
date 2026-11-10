@@ -42,6 +42,14 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
 }) => {
   const isHybrid = fullAttnLayers.length > 0 && fullAttnLayers.length < numLayers;
   const isFullAttn = !isHybrid || fullAttnLayers.includes(currentLayer);
+  const selectableLayers = isHybrid
+    ? fullAttnLayers
+    : Array.from({ length: numLayers }, (_, index) => index);
+  const sliderIndex = Math.max(0, selectableLayers.indexOf(currentLayer));
+  const sliderMax = Math.max(0, selectableLayers.length - 1);
+  const firstSelectable = selectableLayers[0] ?? 0;
+  const middleSelectable = selectableLayers[Math.floor(selectableLayers.length / 2)] ?? 0;
+  const lastSelectable = selectableLayers[selectableLayers.length - 1] ?? 0;
 
   return (
     <div className="bg-slate-900/60 rounded-xl border border-slate-800/80 p-4 space-y-4 shadow-xl">
@@ -84,13 +92,27 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
         <input
           type="range"
           min={0}
-          max={Math.max(0, numLayers - 1)}
-          value={currentLayer}
-          onChange={(e) => onLayerChange(parseInt(e.target.value))}
-          disabled={disabled || numLayers <= 1}
+          max={sliderMax}
+          value={sliderIndex}
+          onChange={(e) => {
+            const next = selectableLayers[parseInt(e.target.value)];
+            if (next !== undefined) onLayerChange(next);
+          }}
+          disabled={disabled || selectableLayers.length <= 1}
           className="w-full accent-indigo-500 bg-slate-800 rounded-lg cursor-pointer h-1.5"
         />
-        
+        {isHybrid && (
+          <p className="mt-1 text-[10px] text-slate-500">
+            滑块只经过 {fullAttnLayers.length} 个有 Softmax 注意力矩阵的 Full Attention 层。
+          </p>
+        )}
+
+        {isHybrid && !isFullAttn && (
+          <div className="mt-2 p-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-300">
+            当前 Layer {currentLayer} 是线性注意力层，没有 Softmax 注意力矩阵。请选择上方任一 Full Attention 层。
+          </div>
+        )}
+
         {/* If hybrid architecture, show quick buttons for Full Attention layers */}
         {isHybrid && (
           <div className="mt-2 flex items-center gap-1.5 flex-wrap">
@@ -113,9 +135,9 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
         )}
 
         <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-mono">
-          <span>0 (底层词法)</span>
-          <span>{Math.floor(numLayers / 2)} (中层句法)</span>
-          <span>{Math.max(0, numLayers - 1)} (高层语义)</span>
+          <span>L{firstSelectable}</span>
+          <span>L{middleSelectable}</span>
+          <span>L{lastSelectable}</span>
         </div>
       </div>
 

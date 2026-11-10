@@ -24,6 +24,7 @@ import { ConceptLab } from './components/ConceptLab';
 import { TopKBarChart } from './components/Visualizers/TopKBarChart';
 import { LayerHeadSelector } from './components/LayerHeadSelector';
 import { SmoothRenderPipeline, type TokenTimingMetric, type AnyTokenStepPayload } from './utils/renderPipeline';
+import { STATIC_MODEL_STRUCTURE } from './config/modelStructure';
 import type {
   SingleStepInspectResponse,
   ModelMetadata,
@@ -1430,8 +1431,11 @@ export function App() {
           {/* Right 1 Col: Selector & Real-Time Top-K Bar Chart */}
           <div className="space-y-4">
             <LayerHeadSelector
-              numLayers={modelMeta?.num_layers || 24}
-              numHeads={modelArch === 'rwkv' ? 16 : modelArch === 'mamba' ? 0 : (modelMeta?.num_heads || 8)}
+              numLayers={modelMeta?.num_layers || STATIC_MODEL_STRUCTURE[modelArch].numLayers}
+              numHeads={
+                modelMeta?.num_heads ??
+                STATIC_MODEL_STRUCTURE[modelArch].numHeads
+              }
               showHead={modelArch !== 'mamba'}
               currentLayer={currentLayer}
               currentHead={currentHead}
@@ -1443,7 +1447,11 @@ export function App() {
               onTopKChange={setTopK}
               repetitionPenalty={repetitionPenalty}
               onRepetitionPenaltyChange={setRepetitionPenalty}
-              fullAttnLayers={modelArch === 'transformer' ? modelMeta?.full_attn_layers : undefined}
+              fullAttnLayers={
+                modelArch === 'transformer'
+                  ? modelMeta?.full_attn_layers ?? [...STATIC_MODEL_STRUCTURE.transformer.fullAttnLayers]
+                  : undefined
+              }
               disabled={isStreaming || singleLoading}
               isStreaming={isStreaming}
               modelType={modelArch}
