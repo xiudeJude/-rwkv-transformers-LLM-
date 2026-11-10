@@ -82,6 +82,21 @@ flowchart TD
 | **GPU / 显存** | NVIDIA GPU $\ge$ 6GB VRAM（支持 CPU 调试但速度较慢） | NVIDIA RTX 4060 / 3060 或更高（$\ge$ 8GB 显存） |
 | **CUDA 驱动** | CUDA 12.1+ | CUDA 12.4 或 12.6 |
 
+### 本机已测试环境
+
+| 项目 | 实际值 |
+| :--- | :--- |
+| Python | 3.12.4 |
+| PyTorch | 2.6.0+cu124 |
+| CUDA runtime | 12.4 |
+| transformers | 5.17.0 |
+| GPU | NVIDIA GeForce RTX 4060, 8188 MiB |
+| 操作系统 | Windows 11 10.0.26200 |
+| Node.js / npm | 26.8.1 / 12.2.1 |
+
+参考依赖快照：`backend/requirements-lock.reference.txt`。该文件只用于对照，
+不是 CI 强制的锁文件；`torch` 仍需按下一节从官方 CUDA wheel 源单独安装。
+
 ---
 
 ## ⚡ 10 分钟极速复现指南
@@ -101,8 +116,14 @@ python -m venv .venv
 # 激活虚拟环境 (Linux / macOS / WSL)
 # source .venv/bin/activate
 
-# 安装 PyTorch (以 CUDA 12.4 为例，可根据本地显卡环境选配)
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+# 安装 PyTorch：必须按本机 CUDA 驱动选择官方 wheel 源
+# CUDA 12.4 示例（本机实测组合）：
+pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# 其他环境可改用 cu121 / cu126 或 CPU 源，参见 https://pytorch.org/get-started/locally/
+
+# 确认 PyTorch 能识别显卡
+python -c "import torch; print('torch=', torch.__version__, 'cuda=', torch.version.cuda, 'available=', torch.cuda.is_available())"
+# 期望输出类似：torch= 2.6.0+cu124 cuda= 12.4 available= True
 
 # 安装后端依赖清单
 pip install -r backend/requirements.txt
@@ -225,6 +246,7 @@ npm run test:sampling
 * **模型官方来源**：[`state-spaces/mamba-130m-hf`](https://huggingface.co/state-spaces/mamba-130m-hf)
 * **模型性质**：**基座模型（base model），不是对话/指令微调模型**。它适合观察 Mamba 递归状态和英文续写，不应按聊天助手效果评估。
 * **默认模型 ID**：`state-spaces/mamba-130m-hf`（`transformers` 会自动下载到 Hugging Face 缓存）
+* **下载体积**：约 494.7 MiB（`model.safetensors` 516,567,560 B + tokenizer/配置）
 * **可选本地路径**：`backend/models/mamba-130m-hf`
 * **命令行下载**：
   ```bash
@@ -254,6 +276,10 @@ npm run test:sampling
   DEFAULT_ATTENTION_BASELINE=Qwen/Qwen2.5-0.5B
   ATTENTION_BASELINE_MODEL_TYPE=attention_baseline
   ```
+
+> **模型缺失时界面表现**：页签仍可切换，但引擎状态保持“未加载”；首次生成会在
+> 加载阶段显示“加载中”，失败后显示“加载失败”和具体错误；概念实验室对应模型
+> 卡片显示“不可用”。不会自动回退到其他模型，也不会用上一个模型的路径冒充当前模型。
 
 > **国内下载加速提示**：
 > 在中国大陆网络环境下，若下载 Hugging Face 权重过慢，可设置镜像站环境变量后执行下载：
