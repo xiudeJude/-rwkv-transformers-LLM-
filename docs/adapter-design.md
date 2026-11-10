@@ -16,7 +16,9 @@ InferenceSession（通用会话包装器）
         ▼
 ModelAdapter（抽象基类）
         ├── TransformerAdapter（transformer）
-        └── RWKVAdapter（rwkv）
+        │     └── PureAttentionAdapter（attention_baseline，仅概念实验室）
+        ├── RWKVAdapter（rwkv）
+        └── MambaAdapter（mamba）
 ```
 
 - `ModelAdapter`：模型生命周期、分词/反分词、prefill、逐步生成、内部状态导出。
@@ -74,6 +76,11 @@ step(state, temperature=0.7, top_k=10,
   `backend/tests` 不受影响。
 - 采样、重复惩罚、EOS 判断都在适配器内部完成；新增模型只需实现自己的
   `prefill/step`，不需要再写一套 Session 类。
+- `prefill` 可选接收 `prompt_token_ids` / `capture_attention=False`，供概念实验室
+  做精确长度、只关心缓存字节数的测量；默认参数保持原有行为。
+- `cache_metrics(state)` 返回概念实验室使用的轻量拆分：`cache_bytes`、
+  `kv_bytes`、`linear_state_bytes`、缓存 dtype 与层号。默认实现会报错，四个
+  已注册适配器均已覆盖。
 
 ### 2.4 状态导出
 
@@ -94,7 +101,7 @@ O(L²) 注意力矩阵。Level 2 按需查询使用默认值 `True`。
 | 字段 | 类型 | 含义 |
 | :--- | :--- | :--- |
 | `kind` | `str` | `"attention"` 或 `"recurrent_state"` |
-| `model_type` | `str` | 适配器注册名，如 `"transformer"` / `"rwkv"` / `"mamba"` |
+| `model_type` | `str` | 适配器注册名，如 `"transformer"` / `"attention_baseline"` / `"rwkv"` / `"mamba"` |
 | `layer` | `int` | 目标层 |
 | `head` | `int \| null` | 目标头；为 null 表示整层/全部头 |
 | `num_layers` | `int` | 模型总层数 |
@@ -133,8 +140,9 @@ O(L²) 注意力矩阵。Level 2 按需查询使用默认值 `True`。
   公开字段（兼容 `DynamicCache.layers[i].keys/values`、`key_cache`、`value_cache`
   等不同版本布局）；遇到 `nn.Module`、类对象和配置元数据时剪枝，不会遍历模型计算图。
 
-概念实验室的 A 卡片直接使用 `cache_bytes` 绘制三种架构的内存增长曲线；
-字段拆分与数据来源见 `docs/concept-lab.md`。
+概念实验室的 A 卡片直接使用 `cache_bytes` 绘制四个模型的 prefill 缓存曲线；
+Transformer 还会把缓存拆成 `kv_bytes` 与 `linear_state_bytes`，理论 KV 只与
+`kv_bytes` 比较。字段拆分与数据来源见 `docs/concept-lab.md`。
 
 ### 3.2 前端消费方式
 
@@ -164,21 +172,30 @@ class TransformerAdapter(ModelAdapter):
 class RWKVAdapter(ModelAdapter):
     ...
 
+@register_adapter("attention_baseline")
+class PureAttentionAdapter(TransformerAdapter):
+    # 只覆盖 model_type，加载/prefill/step/导出全部复用 TransformerAdapter
+    ...
+
 adapter = create_adapter("rwkv")   # 按注册名创建实例
 ```
 
 配置项：
 
 ```dotenv
-MODEL_TYPE=transformer       # /api/model/info 默认引擎、Transformer 路由使用
-RWKV_MODEL_TYPE=rwkv         # RWKV 路由使用
+MODEL_TYPE=transformer                       # /api/model/info 默认引擎、Transformer 路由使用
+RWKV_MODEL_TYPE=rwkv                         # RWKV 路由使用
+MAMBA_MODEL_TYPE=mamba                       # Mamba 路由使用
+ATTENTION_BASELINE_MODEL_TYPE=attention_baseline  # 概念实验室纯注意力对照
+DEFAULT_ATTENTION_BASELINE=Qwen/Qwen2.5-0.5B
 ```
 
 路由在启动时通过 `create_adapter(settings.MODEL_TYPE)` /
 `create_adapter(settings.RWKV_MODEL_TYPE)` / `create_adapter(settings.MAMBA_MODEL_TYPE)`
-获取适配器，而不是硬编码类名。
+获取适配器，而不是硬编码类名。`PureAttentionAdapter` 只由概念实验室直接创建，
+不新增顶层架构 Tab，也不改变 Qwen3.5 的 GGUF 加载与推理行为。
 注意：适配器模块必须被导入后才会执行 `@register_adapter`，`routes.py` 已经
-在顶部导入三个适配器模块。
+在顶部导入四个适配器模块。
 
 ## 5. 新增一个模型（通用步骤）
 
@@ -328,7 +345,27 @@ PyTorch reference 实现。为了保持交互可用，Mamba 路由限制：
 4. `state_bytes` 在不同 prompt 长度下保持一致；
 5. 前端只消费统一结构，未写死模型名称。
 
-## 7. 兼容性与行为保证
+## 7. 纯注意力对照：PureAttentionAdapter
+
+`backend/app/models/attention_baseline.py` 注册了 `"attention_baseline"`，用于
+概念实验室 A 卡片的纯注意力基线。它继承 `TransformerAdapter`，只覆盖
+`model_type`；没有复制加载、分词、prefill、step 或状态导出代码。
+
+- 默认权重：`Qwen/Qwen2.5-0.5B`，非 gated，fp16/bf16 参数约 988 MB；
+- config 没有 `layer_types`，因此 24 层全部是 `full_attention`；
+- 每个 token 的 KV 字节数为 `2 × 24 × 2 × 64 × 2 = 12,288 B`；
+- `cache_metrics()` 返回 `kv_bytes == cache_bytes`、`linear_state_bytes == 0`；
+- 测试 `test_attention_baseline.py` 从 config 推导每 token 字节数，并逐点核对
+  实际 `kv_bytes` 与理论值完全相等；
+- 该适配器只在概念实验室内部创建，不注册顶层 Tab。
+
+Qwen3.5 的混合缓存拆分走同一个 `TransformerAdapter.cache_breakdown()`：层号来自
+`config.layer_types`，不写死；全注意力层的 `keys/values` 计入 `kv_bytes`，
+其余缓存（线性层 `conv_states` / `recurrent_states`）计入 `linear_state_bytes`。
+`test_state_bytes_split.py` 同时断言 `cache_bytes = kv_bytes + linear_state_bytes`
+且 `kv_bytes` 与理论公式逐点相等。
+
+## 8. 兼容性与行为保证
 
 - `TransformerEngine` / `RWKVEngine` 保留为适配器别名。
 - `InferenceSession` / `RWKVSession` 保留原类名与公开方法：
