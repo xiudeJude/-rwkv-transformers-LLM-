@@ -23,6 +23,33 @@ export interface AttentionData {
   token_ids: number[];
 }
 
+/**
+ * 后端统一的内部状态结构。
+ * kind === 'attention' 时 matrix 为 [L, L]，row 为当前步注意力行；
+ * kind === 'recurrent_state' 时 matrix 为 [H, D, D] 或 [D, D]，
+ * summary/head_norms 为各头范数，delta 为相对上一步的变化。
+ */
+export interface InternalState {
+  kind: 'attention' | 'recurrent_state';
+  model_type: string;
+  layer: number;
+  head?: number | null;
+  num_layers: number;
+  num_heads: number;
+  seq_len: number;
+  step: number;
+  state_bytes: number;
+  tokens: string[];
+  token_ids: number[];
+  shape: number[];
+  matrix?: number[][] | number[][][] | null;
+  row?: number[] | null;
+  summary?: number[] | null;
+  delta?: number[] | null;
+  head_norms?: number[] | null;
+  meta?: Record<string, unknown>;
+}
+
 export interface SingleStepInspectRequest {
   prompt: string;
   model_name?: string;
@@ -39,6 +66,7 @@ export interface SingleStepInspectResponse {
   attention: AttentionData;
   next_token: TokenCandidate;
   top_k_candidates: TokenCandidate[];
+  state?: InternalState;
 }
 
 export interface TokenStepPayload {
@@ -49,6 +77,7 @@ export interface TokenStepPayload {
   token_prob: number;
   topk_candidates: TokenCandidate[];
   attention_row?: number[];
+  state?: InternalState;
   is_finished: boolean;
   finish_reason?: string;
   message?: string;
@@ -65,6 +94,7 @@ export interface SessionAttentionResponse {
   seq_len: number;
   attention_row: number[];
   full_matrix: number[][];
+  state?: InternalState;
 }
 
 export interface RWKVTokenStepPayload extends TokenStepPayload {
@@ -83,6 +113,7 @@ export interface RWKVStateResponse {
   shape: number[];
   head_norms: number[];
   matrix: number[][] | number[][][]; // [64, 64] if head specified, else [16, 64, 64]
+  state?: InternalState;
 }
 
 

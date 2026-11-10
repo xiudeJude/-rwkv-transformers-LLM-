@@ -25,6 +25,7 @@ import type {
   SingleStepInspectResponse,
   ModelMetadata,
   TokenCandidate,
+  InternalState,
   RWKVTokenStepPayload,
   RWKVStateResponse,
   SessionAttentionResponse
@@ -218,8 +219,15 @@ export function App() {
 
       const data: SingleStepInspectResponse = await res.json();
       setInspectData(data);
-      setHeatmapMatrix(data.attention.matrix);
-      setHeatmapTokens(data.attention.tokens);
+      const unified = data.state;
+      const stateMatrix =
+        unified?.kind === 'attention' && Array.isArray(unified.matrix)
+          ? (unified.matrix as number[][])
+          : null;
+      setHeatmapMatrix(stateMatrix ?? data.attention.matrix);
+      setHeatmapTokens(
+        unified?.tokens && unified.tokens.length > 0 ? unified.tokens : data.attention.tokens
+      );
       if (data.model_meta) {
         setModelMeta(data.model_meta);
       }
@@ -334,19 +342,42 @@ export function App() {
       const sessionId = sessionData.session_id;
       setActiveSessionId(sessionId);
 
-      // Initialize Visualization buffers with Prefill data
-      if (modelArch === 'transformer' && sessionData.prefill_attention) {
-        promptTokensRef.current = sessionData.prefill_attention.tokens;
-        allTokensRef.current = [...sessionData.prefill_attention.tokens];
-        setHeatmapMatrix(sessionData.prefill_attention.matrix);
-        setHeatmapTokens([...sessionData.prefill_attention.tokens]);
-      } else if (modelArch === 'rwkv' && sessionData.prefill_state) {
-        const pState = sessionData.prefill_state;
-        promptTokensRef.current = pState.tokens;
-        allTokensRef.current = [...pState.tokens];
-        setRwkvTokens([...pState.tokens]);
-        setRwkvSummaries([pState.state_summary]);
-        setRwkvDeltas([pState.delta]);
+      // Initialize Visualization buffers with Prefill data.
+      // Prefer the unified `state` envelope; fall back to legacy fields for compatibility.
+      const unifiedState = sessionData.state as InternalState | undefined;
+      if (modelArch === 'transformer') {
+        const stateMatrix =
+          unifiedState?.kind === 'attention' && Array.isArray(unifiedState.matrix)
+            ? (unifiedState.matrix as number[][])
+            : null;
+        if (stateMatrix && unifiedState?.tokens) {
+          promptTokensRef.current = unifiedState.tokens;
+          allTokensRef.current = [...unifiedState.tokens];
+          setHeatmapMatrix(stateMatrix);
+          setHeatmapTokens([...unifiedState.tokens]);
+        } else if (sessionData.prefill_attention) {
+          promptTokensRef.current = sessionData.prefill_attention.tokens;
+          allTokensRef.current = [...sessionData.prefill_attention.tokens];
+          setHeatmapMatrix(sessionData.prefill_attention.matrix);
+          setHeatmapTokens([...sessionData.prefill_attention.tokens]);
+        }
+      } else if (modelArch === 'rwkv') {
+        if (unifiedState?.kind === 'recurrent_state') {
+          const summary = unifiedState.summary ?? unifiedState.head_norms ?? [];
+          const delta = unifiedState.delta ?? new Array(summary.length).fill(0);
+          promptTokensRef.current = unifiedState.tokens;
+          allTokensRef.current = [...unifiedState.tokens];
+          setRwkvTokens([...unifiedState.tokens]);
+          setRwkvSummaries([summary]);
+          setRwkvDeltas([delta]);
+        } else if (sessionData.prefill_state) {
+          const pState = sessionData.prefill_state;
+          promptTokensRef.current = pState.tokens;
+          allTokensRef.current = [...pState.tokens];
+          setRwkvTokens([...pState.tokens]);
+          setRwkvSummaries([pState.state_summary]);
+          setRwkvDeltas([pState.delta]);
+        }
       }
 
       setStreamStatus('connecting');
@@ -376,23 +407,34 @@ export function App() {
 
           if (modelArch === 'transformer') {
             setHeatmapTokens([...allTokensRef.current]);
+            const unified = item.state;
+            const unifiedRow =
+              unified?.kind === 'attention' ? (unified.row ?? undefined) : undefined;
+            const row = unifiedRow && unifiedRow.length > 0 ? unifiedRow : item.attention_row;
             // Incremental Canvas row append:
-            if (item.attention_row && item.attention_row.length > 0) {
+            if (row && row.length > 0) {
               setIncrementalRow({
                 rowIndex: promptTokensRef.current.length + item.step - 1,
                 token: item.token,
-                weights: item.attention_row,
+                weights: row,
               });
             }
           } else {
             const rwkvItem = item as RWKVTokenStepPayload;
             setRwkvTokens([...allTokensRef.current]);
-            if (rwkvItem.state_summary && rwkvItem.delta) {
+            const unified = rwkvItem.state;
+            const summary =
+              unified?.kind === 'recurrent_state'
+                ? unified.summary ?? unified.head_norms
+                : rwkvItem.state_summary;
+            const delta =
+              unified?.kind === 'recurrent_state' ? unified.delta : rwkvItem.delta;
+            if (summary && delta) {
               setRwkvIncrementalRow({
                 step: rwkvItem.step,
                 token: rwkvItem.token,
-                state_summary: rwkvItem.state_summary,
-                delta: rwkvItem.delta,
+                state_summary: summary,
+                delta,
               });
             }
           }
@@ -494,8 +536,15 @@ export function App() {
       }
 
       const data: SessionAttentionResponse = await res.json();
-      setHeatmapMatrix(data.full_matrix);
-      setHeatmapTokens(data.tokens);
+      const unified = data.state;
+      const stateMatrix =
+        unified?.kind === 'attention' && Array.isArray(unified.matrix)
+          ? (unified.matrix as number[][])
+          : null;
+      setHeatmapMatrix(stateMatrix ?? data.full_matrix);
+      setHeatmapTokens(
+        unified?.tokens && unified.tokens.length > 0 ? unified.tokens : data.tokens
+      );
       setIncrementalRow(null); // Switch to full redraw mode with new matrix
     } catch (err: any) {
       setError(err.message || '回填注意力数据失败');
@@ -527,7 +576,11 @@ export function App() {
       const newSummaries: number[][] = [];
       const newDeltas: number[][] = [];
       for (let s = 0; s < results.length; s++) {
-        const norms: number[] = results[s].head_norms || [];
+        const state = results[s].state as InternalState | undefined;
+        const norms: number[] =
+          (state?.kind === 'recurrent_state' ? state.head_norms : undefined) ??
+          results[s].head_norms ??
+          [];
         newSummaries.push(norms);
         if (s === 0) {
           newDeltas.push(new Array(16).fill(0));
@@ -599,8 +652,16 @@ export function App() {
           );
           if (!res.ok) throw new Error(`拉取失败 (${res.status})`);
           const data: RWKVStateResponse = await res.json();
-          setRwkvModalMatrix(data.matrix as number[][]);
-          setRwkvModalNorm(data.head_norms?.[currentHead]);
+          const unified = data.state;
+          const stateMatrix =
+            unified?.kind === 'recurrent_state' && Array.isArray(unified.matrix)
+              ? (unified.matrix as number[][])
+              : null;
+          setRwkvModalMatrix(stateMatrix ?? (data.matrix as number[][]));
+          setRwkvModalNorm(
+            (unified?.kind === 'recurrent_state' ? unified.head_norms?.[currentHead] : undefined) ??
+              data.head_norms?.[currentHead]
+          );
           setIsRwkvModalOpen(true);
         } catch (err: any) {
           setError(err.message || '拉取 RWKV 状态矩阵失败');

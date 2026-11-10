@@ -2,32 +2,40 @@ import asyncio
 import orjson
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, Response
-from ..core.schemas import SingleStepInspectRequest, SingleStepInspectResponse, ModelMetadata
+from ..core.schemas import SingleStepInspectRequest, SingleStepInspectResponse, ModelMetadata, InternalState
 from ..core.config import settings
-from ..models.transformer import TransformerEngine
-from ..models.rwkv_engine import RWKVEngine
+from ..models.adapter_base import ModelAdapter
+from ..models.adapter_registry import create_adapter
+# Importing the adapter modules registers "transformer" / "rwkv" in the registry.
+from ..models.transformer import TransformerAdapter
+from ..models.rwkv_engine import RWKVAdapter
 from ..models.rwkv_session import rwkv_session_manager
 
 router = APIRouter()
 
 # Global inference engine instances
-_engine: Optional[TransformerEngine] = None
-_rwkv_engine: Optional[RWKVEngine] = None
+_engine: Optional[ModelAdapter] = None
+_rwkv_engine: Optional[ModelAdapter] = None
 
-def get_engine() -> TransformerEngine:
+def get_engine() -> ModelAdapter:
     global _engine
     if _engine is None:
-        _engine = TransformerEngine()
+        _engine = create_adapter(settings.MODEL_TYPE)
         # Initialize default model
         _engine.load_model(settings.DEFAULT_TRANSFORMER, device=settings.DEVICE)
     return _engine
 
-def get_rwkv_engine() -> RWKVEngine:
+def get_rwkv_engine() -> ModelAdapter:
     global _rwkv_engine
     if _rwkv_engine is None:
-        _rwkv_engine = RWKVEngine()
+        _rwkv_engine = create_adapter(settings.RWKV_MODEL_TYPE)
         _rwkv_engine.load_model(settings.DEFAULT_RWKV, device=settings.DEVICE)
     return _rwkv_engine
+
+
+def _dump_state(state: InternalState) -> Dict[str, Any]:
+    """统一状态对象 -> JSON 友好的 dict。"""
+    return state.model_dump()
 
 @router.get("/health")
 async def health():
@@ -76,10 +84,12 @@ async def create_session(req: CreateSessionRequest):
             target_layer=req.layer,
             target_head=req.head
         )
+        state = session.export_state(step=0, layer=req.layer, head=req.head)
         return {
             "status": "success",
             "session_id": session.session_id,
-            "prefill_attention": prefill_result
+            "prefill_attention": prefill_result,
+            "state": _dump_state(state)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prefill failed: {str(e)}")
@@ -97,10 +107,17 @@ async def session_step(session_id: str, req: StepRequest):
             target_layer=req.layer,
             target_head=req.head
         )
+        state = session.export_state(
+            step=session.step_count,
+            layer=req.layer,
+            head=req.head,
+            include_matrix=False,
+        )
         return {
             "status": "success",
             "session_id": session_id,
-            **step_result
+            **step_result,
+            "state": _dump_state(state)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Step failed: {str(e)}")
@@ -125,9 +142,11 @@ async def get_session_attention(
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found or expired")
     try:
         detail = session.get_attention_detail(step=step, layer=layer, head=head)
+        state = session.export_state(step=step, layer=layer, head=head)
         return {
             "status": "success",
-            **detail
+            **detail,
+            "state": _dump_state(state)
         }
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -207,6 +226,15 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
                 break
             tokens_generated += 1
 
+            # 统一状态导出与推理一样走线程，避免同步张量转换阻塞事件循环
+            state = await asyncio.to_thread(
+                session.export_state,
+                step=step_res["step"],
+                layer=target_layer,
+                head=target_head,
+                include_matrix=False,
+            )
+
             # Level 1 lightweight message with single-row attention slice
             level1_payload = {
                 "type": "token_step",
@@ -216,6 +244,7 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
                 "token_prob": step_res["token_prob"],
                 "topk_candidates": step_res["topk_candidates"],
                 "attention_row": step_res["attention_slice"]["weights"],
+                "state": _dump_state(state),
                 "is_finished": step_res["is_finished"]
             }
             await websocket.send_json(level1_payload)
@@ -278,10 +307,12 @@ async def create_rwkv_session(req: CreateSessionRequest):
             prompt=req.prompt,
             target_layer=req.layer
         )
+        state = session.export_state(step=0, layer=req.layer, head=None, include_matrix=False)
         return {
             "status": "success",
             "session_id": session.session_id,
-            "prefill_state": prefill_result
+            "prefill_state": prefill_result,
+            "state": _dump_state(state)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RWKV Prefill failed: {str(e)}")
@@ -298,10 +329,17 @@ async def session_rwkv_step(session_id: str, req: StepRequest):
             repetition_penalty=req.repetition_penalty,
             target_layer=req.layer
         )
+        state = session.export_state(
+            step=session.step_count,
+            layer=req.layer,
+            head=req.head,
+            include_matrix=False,
+        )
         return {
             "status": "success",
             "session_id": session_id,
-            **step_result
+            **step_result,
+            "state": _dump_state(state)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RWKV Step failed: {str(e)}")
@@ -325,7 +363,12 @@ async def get_session_rwkv_state(
         raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found or expired")
     try:
         detail = session.get_rwkv_state(step=step, layer=layer, head=head)
-        payload = {"status": "success", **detail}
+        # 已有 legacy matrix；仅在指定 head（Level 2 弹窗）时让统一状态也携带矩阵，
+        # 避免全层回填时重复传输 16x64x64 数据。
+        state = session.export_state(
+            step=step, layer=layer, head=head, include_matrix=head is not None
+        )
+        payload = {"status": "success", **detail, "state": _dump_state(state)}
         return Response(content=orjson.dumps(payload), media_type="application/json")
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -399,6 +442,14 @@ async def session_rwkv_websocket_stream(websocket: WebSocket, session_id: str):
                 break
             tokens_generated += 1
 
+            state = await asyncio.to_thread(
+                session.export_state,
+                step=step_res["step"],
+                layer=target_layer,
+                head=None,
+                include_matrix=False,
+            )
+
             level1_payload = {
                 "type": "token_step",
                 "step": step_res["step"],
@@ -409,6 +460,7 @@ async def session_rwkv_websocket_stream(websocket: WebSocket, session_id: str):
                 "state_summary": step_res["state_summary"],
                 "delta": step_res["delta"],
                 "layer": step_res["layer"],
+                "state": _dump_state(state),
                 "is_finished": step_res["is_finished"]
             }
             await websocket.send_json(level1_payload)

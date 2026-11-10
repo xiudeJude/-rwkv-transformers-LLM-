@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .adapter_base import ModelAdapter, estimate_state_bytes
+from .adapter_registry import register_adapter
 from ..core.schemas import (
     ModelMetadata,
     AttentionData,
@@ -54,6 +55,7 @@ class TransformerAdapterState:
     is_finished: bool = False
 
 
+@register_adapter("transformer")
 class TransformerAdapter(ModelAdapter):
     """Transformer 因果模型的统一适配器，使用 PyTorch forward hook 提取注意力。"""
 
@@ -372,11 +374,13 @@ class TransformerAdapter(ModelAdapter):
 
         attn_layer_idx = full_layers.index(layer) if full_layers else min(layer, len(state.prefill_attentions) - 1)
 
-        # Determine target step
+        # Determine target step. 并发 Level 2 读取可能发生在 step() 已增加
+        # step_count、但新一步注意力尚未写入 history 的窗口内，按已落盘历史截断。
         if step is None or step > state.step_count:
             target_step = state.step_count
         else:
             target_step = max(0, step)
+        target_step = min(target_step, len(state.step_attentions))
 
         L_prompt = len(state.prefill_attentions[attn_layer_idx][head])
         L_total = L_prompt + target_step
@@ -440,7 +444,10 @@ class TransformerAdapter(ModelAdapter):
         effective_layer = self._resolve_attention_layer(layer)
 
         if include_matrix:
-            detail = self.get_attention_detail(state, step=step, layer=layer, head=target_head)
+            # prefill/step 对 hybrid 模型会把线性层映射到最近的 full attention 层，
+            # 统一状态导出沿用同样的映射；Level 2 显式查询线性层仍由
+            # get_attention_detail 抛出 ValueError。
+            detail = self.get_attention_detail(state, step=step, layer=effective_layer, head=target_head)
             matrix = detail["full_matrix"]
             row = detail["attention_row"]
             target_step = detail["step"]
@@ -459,6 +466,7 @@ class TransformerAdapter(ModelAdapter):
                 target_step = state.step_count
             else:
                 target_step = max(0, step)
+            target_step = min(target_step, len(state.step_attentions))
             L_prompt = len(state.prefill_attentions[attn_layer_idx][target_head])
             L_total = L_prompt + target_step
             if target_step == 0:

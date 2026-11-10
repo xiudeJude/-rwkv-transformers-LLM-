@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import torch
 
 from .adapter_base import ModelAdapter, estimate_state_bytes
+from .adapter_registry import register_adapter
 from ..core.schemas import ModelMetadata, InternalState
 
 # Explicitly enable RWKV-7 architecture support
@@ -23,6 +24,7 @@ class RWKVAdapterState:
     is_finished: bool = False
 
 
+@register_adapter("rwkv")
 class RWKVAdapter(ModelAdapter):
     """Inference engine implementation for RWKV-7 (Goose) models using the official rwkv package."""
 

@@ -68,6 +68,16 @@ class Settings:
         return int(os.getenv("MAX_SESSIONS", "10"))
 
     @property
+    def MODEL_TYPE(self) -> str:
+        """默认模型适配器类型名，注册表据此创建 Transformer 侧引擎。"""
+        return os.getenv("MODEL_TYPE", "transformer")
+
+    @property
+    def RWKV_MODEL_TYPE(self) -> str:
+        """RWKV 侧模型适配器类型名，注册表据此创建 RWKV 侧引擎。"""
+        return os.getenv("RWKV_MODEL_TYPE", "rwkv")
+
+    @property
     def DEVICE(self) -> str:
         override = os.getenv("DEVICE", "")
         if override:
