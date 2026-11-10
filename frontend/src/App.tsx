@@ -912,7 +912,7 @@ export function App() {
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
             <div className={`w-2 h-2 rounded-full ${modelMeta ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
             <span className="text-slate-300 font-mono text-[11px]">
-              {modelMeta ? `${modelMeta.device.toUpperCase()}` : '等待后端...'}
+              {modelMeta ? `已连接 · ${modelMeta.device.toUpperCase()}` : '等待后端...'}
             </span>
           </div>
         </div>
