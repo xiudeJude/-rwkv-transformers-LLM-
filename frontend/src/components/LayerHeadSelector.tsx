@@ -17,7 +17,8 @@ interface LayerHeadSelectorProps {
   fullAttnLayers?: number[];
   disabled?: boolean;
   isStreaming?: boolean;
-  modelType?: 'transformer' | 'rwkv';
+  modelType?: 'transformer' | 'rwkv' | 'mamba';
+  showHead?: boolean;
 }
 
 export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
@@ -37,6 +38,7 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
   disabled = false,
   isStreaming = false,
   modelType = 'transformer',
+  showHead = true,
 }) => {
   const isHybrid = fullAttnLayers.length > 0 && fullAttnLayers.length < numLayers;
   const isFullAttn = !isHybrid || fullAttnLayers.includes(currentLayer);
@@ -69,7 +71,11 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
       <div>
         <div className="flex items-center justify-between text-xs mb-1.5">
           <span className="text-slate-400">
-            {modelType === 'rwkv' ? '选择 RWKV 状态递推层 (Layer):' : '选择 Transformer 层 (Layer):'}
+            {modelType === 'rwkv'
+              ? '选择 RWKV 状态递推层 (Layer):'
+              : modelType === 'mamba'
+                ? '选择 Mamba 递归层 (Layer):'
+                : '选择 Transformer 层 (Layer):'}
           </span>
           <span className="font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
             Layer {currentLayer} / {Math.max(0, numLayers - 1)}
@@ -113,34 +119,36 @@ export const LayerHeadSelector: React.FC<LayerHeadSelectorProps> = ({
         </div>
       </div>
 
-      {/* Head selector */}
-      <div>
-        <div className="flex items-center justify-between text-xs mb-1.5">
-          <span className="text-slate-400">
-            {modelType === 'rwkv' ? '选择状态观察头 (Head):' : '选择注意力头 (Head):'}
-          </span>
-          <span className="font-mono font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
-            Head {currentHead} / {Math.max(0, numHeads - 1)}
-          </span>
+      {/* Head selector: Mamba has no attention/RWKV head semantics. */}
+      {showHead && (
+        <div>
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="text-slate-400">
+              {modelType === 'rwkv' ? '选择状态观察头 (Head):' : '选择注意力头 (Head):'}
+            </span>
+            <span className="font-mono font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
+              Head {currentHead} / {Math.max(0, numHeads - 1)}
+            </span>
+          </div>
+          <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
+            {Array.from({ length: numHeads || 8 }).map((_, idx) => (
+              <button
+                key={idx}
+                type="button"
+                disabled={disabled}
+                onClick={() => onHeadChange(idx)}
+                className={`py-1 text-xs font-mono rounded border transition-all ${
+                  currentHead === idx
+                    ? 'bg-sky-500 text-white font-bold border-sky-400 shadow-md shadow-sky-500/20'
+                    : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200'
+                }`}
+              >
+                H{idx}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
-          {Array.from({ length: numHeads || 8 }).map((_, idx) => (
-            <button
-              key={idx}
-              type="button"
-              disabled={disabled}
-              onClick={() => onHeadChange(idx)}
-              className={`py-1 text-xs font-mono rounded border transition-all ${
-                currentHead === idx
-                  ? 'bg-sky-500 text-white font-bold border-sky-400 shadow-md shadow-sky-500/20'
-                  : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200'
-              }`}
-            >
-              H{idx}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Temperature and Top-K controls */}
       <div className="pt-2 border-t border-slate-800/80 space-y-3">

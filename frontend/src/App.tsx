@@ -18,6 +18,7 @@ import {
 import { AttentionHeatmap, type IncrementalRowPayload } from './components/Visualizers/AttentionHeatmap';
 import { RWKVWaterfall, type RWKVIncrementalRowPayload } from './components/Visualizers/RWKVWaterfall';
 import { RWKVStateModal } from './components/Visualizers/RWKVStateModal';
+import { MambaStatePanel } from './components/Visualizers/MambaStatePanel';
 import { TopKBarChart } from './components/Visualizers/TopKBarChart';
 import { LayerHeadSelector } from './components/LayerHeadSelector';
 import { SmoothRenderPipeline, type TokenTimingMetric, type AnyTokenStepPayload } from './utils/renderPipeline';
@@ -45,10 +46,11 @@ const getWsUrl = (wsEndpoint: string) => {
 };
 
 type StreamStatus = 'idle' | 'creating_session' | 'connecting' | 'streaming' | 'finished' | 'stopped' | 'error';
+type ModelArch = 'transformer' | 'rwkv' | 'mamba';
 
 export function App() {
   const [prompt, setPrompt] = useState('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
-  const [modelArch, setModelArch] = useState<'transformer' | 'rwkv'>('transformer');
+  const [modelArch, setModelArch] = useState<ModelArch>('transformer');
   const [currentLayer, setCurrentLayer] = useState(3);
   const [currentHead, setCurrentHead] = useState(0);
   const [temperature, setTemperature] = useState(0.7);
@@ -64,6 +66,10 @@ export function App() {
   const [rwkvModalMatrix, setRwkvModalMatrix] = useState<number[][] | null>(null);
   const [rwkvModalNorm, setRwkvModalNorm] = useState<number | undefined>(undefined);
   const [isRwkvModalOpen, setIsRwkvModalOpen] = useState(false);
+
+  // Mamba state history (unified InternalState snapshots)
+  const [mambaStates, setMambaStates] = useState<InternalState[]>([]);
+  const [mambaState, setMambaState] = useState<InternalState | null>(null);
 
   // Model metadata & single-step inspect state
   const [singleLoading, setSingleLoading] = useState(false);
@@ -106,7 +112,7 @@ export function App() {
 
   // Synced refs for unmount and unload cleanup
   const activeSessionIdRef = useRef<string | null>(null);
-  const modelArchRef = useRef<'transformer' | 'rwkv'>('transformer');
+  const modelArchRef = useRef<ModelArch>('transformer');
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -117,7 +123,7 @@ export function App() {
   }, [modelArch]);
 
   // Helper to cleanly terminate and release an active session from GPU VRAM
-  const closeActiveSession = (sessId: string | null, arch: 'transformer' | 'rwkv') => {
+  const closeActiveSession = (sessId: string | null, arch: ModelArch) => {
     if (wsRef.current) {
       try {
         if (wsRef.current.readyState === WebSocket.OPEN) {
@@ -133,9 +139,12 @@ export function App() {
       pipelineRef.current.stop();
     }
     if (sessId) {
-      const endpoint = arch === 'transformer'
-        ? `/api/session/${sessId}/close`
-        : `/api/rwkv/session/${sessId}/close`;
+      const endpoint =
+        arch === 'transformer'
+          ? `/api/session/${sessId}/close`
+          : arch === 'rwkv'
+            ? `/api/rwkv/session/${sessId}/close`
+            : `/api/mamba/session/${sessId}/close`;
       fetch(`${API_BASE}${endpoint}`, { method: 'POST' }).catch((err) => {
         console.warn(`[Cleanup] Failed to close session ${sessId}:`, err);
       });
@@ -170,9 +179,12 @@ export function App() {
       const sid = activeSessionIdRef.current;
       const arch = modelArchRef.current;
       if (sid) {
-        const endpoint = arch === 'transformer'
-          ? `/api/session/${sid}/close`
-          : `/api/rwkv/session/${sid}/close`;
+        const endpoint =
+          arch === 'transformer'
+            ? `/api/session/${sid}/close`
+            : arch === 'rwkv'
+              ? `/api/rwkv/session/${sid}/close`
+              : `/api/mamba/session/${sid}/close`;
         navigator.sendBeacon?.(`${API_BASE}${endpoint}`);
       }
     };
@@ -239,7 +251,7 @@ export function App() {
   };
 
   // Architecture switch handler
-  const handleArchSwitch = (newArch: 'transformer' | 'rwkv') => {
+  const handleArchSwitch = (newArch: ModelArch) => {
     if (newArch === modelArch) return;
 
     // Explicitly terminate active session and release GPU VRAM before switching paradigm
@@ -258,6 +270,8 @@ export function App() {
     setRwkvSummaries([]);
     setRwkvDeltas([]);
     setRwkvIncrementalRow(null);
+    setMambaStates([]);
+    setMambaState(null);
     setStreamStatus('idle');
 
     if (newArch === 'transformer') {
@@ -274,9 +288,20 @@ export function App() {
           setCurrentHead(0);
         })
         .catch(console.warn);
-    } else {
+    } else if (newArch === 'rwkv') {
       setPrompt('RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度');
       fetch(`${API_BASE}/api/model/info?model_type=rwkv`)
+        .then((res) => res.json())
+        .then((data: ModelMetadata) => {
+          setModelMeta(data);
+          setCurrentLayer(0);
+          setCurrentHead(0);
+        })
+        .catch(console.warn);
+    } else {
+      setPrompt('Mamba通过选择性状态空间模型实现线性复杂度的长序列建模');
+      setMaxNewTokens((value) => Math.min(value, 128));
+      fetch(`${API_BASE}/api/model/info?model_type=mamba`)
         .then((res) => res.json())
         .then((data: ModelMetadata) => {
           setModelMeta(data);
@@ -310,6 +335,8 @@ export function App() {
     setQueueBacklog(0);
     setIncrementalRow(null);
     setRwkvIncrementalRow(null);
+    setMambaStates([]);
+    setMambaState(null);
     setStreamStatus('creating_session');
 
     if (wsRef.current) {
@@ -322,7 +349,12 @@ export function App() {
 
     try {
       // 1. Create session via synchronous HTTP prefill
-      const createEndpoint = modelArch === 'transformer' ? '/api/session/create' : '/api/rwkv/session/create';
+      const createEndpoint =
+        modelArch === 'transformer'
+          ? '/api/session/create'
+          : modelArch === 'rwkv'
+            ? '/api/rwkv/session/create'
+            : '/api/mamba/session/create';
       const createRes = await fetch(`${API_BASE}${createEndpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -378,6 +410,16 @@ export function App() {
           setRwkvSummaries([pState.state_summary]);
           setRwkvDeltas([pState.delta]);
         }
+      } else if (modelArch === 'mamba') {
+        if (unifiedState?.kind === 'recurrent_state') {
+          promptTokensRef.current = unifiedState.tokens;
+          allTokensRef.current = [...unifiedState.tokens];
+          setMambaState(unifiedState);
+          setMambaStates([unifiedState]);
+        } else if (sessionData.prefill_state) {
+          promptTokensRef.current = sessionData.prefill_state.tokens;
+          allTokensRef.current = [...sessionData.prefill_state.tokens];
+        }
       }
 
       setStreamStatus('connecting');
@@ -419,7 +461,7 @@ export function App() {
                 weights: row,
               });
             }
-          } else {
+          } else if (modelArch === 'rwkv') {
             const rwkvItem = item as RWKVTokenStepPayload;
             setRwkvTokens([...allTokensRef.current]);
             const unified = rwkvItem.state;
@@ -436,6 +478,15 @@ export function App() {
                 state_summary: summary,
                 delta,
               });
+            }
+          } else if (modelArch === 'mamba') {
+            const unified = item.state;
+            if (unified?.kind === 'recurrent_state') {
+              setMambaState(unified);
+              setMambaStates((prev) => [
+                ...prev.filter((snapshot) => snapshot.step !== unified.step),
+                unified,
+              ].sort((a, b) => a.step - b.step));
             }
           }
         },
@@ -454,7 +505,9 @@ export function App() {
       const wsEndpoint =
         modelArch === 'transformer'
           ? `/ws/session/${sessionId}/stream`
-          : `/ws/rwkv/session/${sessionId}/stream`;
+          : modelArch === 'rwkv'
+            ? `/ws/rwkv/session/${sessionId}/stream`
+            : `/ws/mamba/session/${sessionId}/stream`;
       const wsUrl = getWsUrl(wsEndpoint);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -469,7 +522,7 @@ export function App() {
             temperature,
             top_k: topK,
             repetition_penalty: repetitionPenalty,
-            max_new_tokens: maxNewTokens,
+            max_new_tokens: modelArch === 'mamba' ? Math.min(maxNewTokens, 128) : maxNewTokens,
             layer: currentLayer,
             head: currentHead,
           })
@@ -605,7 +658,7 @@ export function App() {
     if (activeSessionId && (streamStatus === 'finished' || streamStatus === 'stopped')) {
       if (modelArch === 'transformer') {
         await handleRefetchSessionAttention(activeSessionId, newLayer, currentHead);
-      } else {
+      } else if (modelArch === 'rwkv') {
         await handleRefetchRwkvLayer(activeSessionId, newLayer);
       }
     } else if (inspectData && !isStreaming && modelArch === 'transformer') {
@@ -642,6 +695,31 @@ export function App() {
 
     debounceTimerRef.current = setTimeout(async () => {
       setInspectedStep(stepNum);
+
+      if (modelArch === 'mamba') {
+        setHeatmapLoading(true);
+        setHeatmapLoadingMessage(`正在提取 Step ${stepNum} 的 Mamba 递归状态摘要...`);
+        try {
+          const res = await fetch(
+            `${API_BASE}/api/mamba/session/${activeSessionId}/state?step=${stepNum}&layer=${currentLayer}`
+          );
+          if (!res.ok) throw new Error(`拉取失败 (${res.status})`);
+          const data: { state?: InternalState } = await res.json();
+          if (data.state) {
+            setMambaState(data.state);
+            setMambaStates((prev) =>
+              [...prev.filter((snapshot) => snapshot.step !== data.state!.step), data.state!].sort(
+                (a, b) => a.step - b.step
+              )
+            );
+          }
+        } catch (err: any) {
+          setError(err.message || '拉取 Mamba 状态失败');
+        } finally {
+          setHeatmapLoading(false);
+        }
+        return;
+      }
 
       if (modelArch === 'rwkv') {
         setHeatmapLoading(true);
@@ -692,6 +770,14 @@ export function App() {
         setHeatmapLoading(false);
       }
     }, 150);
+  };
+
+  const handleMambaSelectStep = (step: number) => {
+    const snapshot = mambaStates.find((item) => item.step === step);
+    if (snapshot) {
+      setMambaState(snapshot);
+      setInspectedStep(step);
+    }
   };
 
   // Computed timing statistics
@@ -758,13 +844,15 @@ export function App() {
             <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
               LLM 可解释性交互工坊
               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                P1: 双架构对比 (Transformer vs RWKV)
+                P0: 三架构对比 (Transformer / RWKV / Mamba)
               </span>
             </h1>
             <p className="text-[11px] text-slate-400">
               {modelArch === 'transformer'
                 ? 'Full Attention 离屏双缓冲增量绘制 • 60 FPS 平滑渲染 • Log-scale 色谱'
-                : 'RWKV-7 隐藏状态瀑布流 • 能量模长演化(Viridis)与单步扰动(Coolwarm) • Level 2 状态探针'}
+                : modelArch === 'rwkv'
+                  ? 'RWKV-7 隐藏状态瀑布流 • 能量模长演化(Viridis)与单步扰动(Coolwarm) • Level 2 状态探针'
+                  : 'Mamba 递归状态面板 • 统一 InternalState components • conv_state / ssm_state 逐层范数'}
             </p>
           </div>
         </div>
@@ -793,6 +881,17 @@ export function App() {
             <Activity className="w-3.5 h-3.5" />
             <span>RWKV-7 (Goose 0.4B)</span>
           </button>
+          <button
+            onClick={() => handleArchSwitch('mamba')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              modelArch === 'mamba'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-600/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Cpu className="w-3.5 h-3.5" />
+            <span>Mamba (130M)</span>
+          </button>
         </div>
 
         {/* Model Meta Badge */}
@@ -801,7 +900,12 @@ export function App() {
             <Cpu className="w-3.5 h-3.5 text-sky-400" />
             <span className="text-slate-400">当前引擎:</span>
             <span className="font-mono text-sky-300 font-semibold">
-              {modelMeta?.model_id || (modelArch === 'transformer' ? 'Qwen3.5-0.8B (GGUF)' : 'RWKV7-0.4B (FP16)')}
+              {modelMeta?.model_id ||
+                (modelArch === 'transformer'
+                  ? 'Qwen3.5-0.8B (GGUF)'
+                  : modelArch === 'rwkv'
+                    ? 'RWKV7-0.4B (FP16)'
+                    : 'Mamba-130M (FP16)')}
             </span>
           </div>
 
@@ -899,7 +1003,7 @@ export function App() {
             <input
               type="range"
               min={5}
-              max={150}
+              max={modelArch === 'mamba' ? 128 : 150}
               step={5}
               value={maxNewTokens}
               onChange={(e) => setMaxNewTokens(parseInt(e.target.value))}
@@ -909,6 +1013,16 @@ export function App() {
             <span className="font-mono text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
               {maxNewTokens} tokens
             </span>
+            {modelArch === 'mamba' && (
+              <>
+                <span className="text-[10px] text-amber-300/90">
+                  纯 PyTorch 参考路径：prompt ≤ 512 tokens，max_new_tokens ≤ 128
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  （无 mamba-ssm / causal-conv1d 加速，速度较慢）
+                </span>
+              </>
+            )}
           </div>
 
           {error && (
@@ -1091,7 +1205,9 @@ export function App() {
                   title={
                     modelArch === 'transformer'
                       ? `点击查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 注意力矩阵快照`
-                      : `点击下钻查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 64x64 隐状态矩阵`
+                      : modelArch === 'rwkv'
+                        ? `点击下钻查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] 64x64 隐状态矩阵`
+                        : `点击查看 Step ${t.step} [${t.token.replace(/\n/g, '\\n')}] Mamba 递归状态摘要`
                   }
                 >
                   {t.token}
@@ -1107,7 +1223,9 @@ export function App() {
               <span className="text-slate-600 text-xs italic ml-2">
                 {modelArch === 'transformer'
                   ? '(点击"流式生成 (WS)"体验自回归增量生成与双层 Canvas 动态热力图...)'
-                  : '(点击"流式生成 (WS)"体验 RWKV-7 隐藏状态模长与差分时序瀑布流...)'}
+                  : modelArch === 'rwkv'
+                    ? '(点击"流式生成 (WS)"体验 RWKV-7 隐藏状态模长与差分时序瀑布流...)'
+                    : '(点击"流式生成 (WS)"查看 Mamba conv_state / ssm_state 逐层状态摘要...)'}
               </span>
             )}
             <div ref={textEndRef} />
@@ -1150,7 +1268,7 @@ export function App() {
                   </div>
                 </div>
               )
-            ) : (
+            ) : modelArch === 'rwkv' ? (
               /* RWKV Mode: Waterfall or Empty State */
               rwkvSummaries.length > 0 || rwkvIncrementalRow || isStreaming ? (
                 <RWKVWaterfall
@@ -1179,6 +1297,16 @@ export function App() {
                   </div>
                 </div>
               )
+            ) : (
+              <MambaStatePanel
+                state={mambaState}
+                states={mambaStates}
+                currentLayer={currentLayer}
+                inspectedStep={inspectedStep}
+                onSelectStep={handleMambaSelectStep}
+                isLoading={heatmapLoading}
+                loadingMessage={heatmapLoadingMessage}
+              />
             )}
           </div>
 
@@ -1186,7 +1314,8 @@ export function App() {
           <div className="space-y-4">
             <LayerHeadSelector
               numLayers={modelMeta?.num_layers || 24}
-              numHeads={modelArch === 'rwkv' ? 16 : (modelMeta?.num_heads || 8)}
+              numHeads={modelArch === 'rwkv' ? 16 : modelArch === 'mamba' ? 0 : (modelMeta?.num_heads || 8)}
+              showHead={modelArch !== 'mamba'}
               currentLayer={currentLayer}
               currentHead={currentHead}
               onLayerChange={handleLayerChange}

@@ -6,7 +6,7 @@ export interface TokenCandidate {
 
 export interface ModelMetadata {
   model_id: string;
-  model_type: 'transformer' | 'rwkv';
+  model_type: 'transformer' | 'rwkv' | 'mamba';
   num_layers: number;
   num_heads: number;
   hidden_size: number;
@@ -23,11 +23,20 @@ export interface AttentionData {
   token_ids: number[];
 }
 
+export interface RecurrentStateComponent {
+  name: string;
+  shape: number[];
+  dtype: string;
+  bytes: number;
+  layer_norms: number[];
+  layer_count?: number;
+}
+
 /**
  * 后端统一的内部状态结构。
  * kind === 'attention' 时 matrix 为 [L, L]，row 为当前步注意力行；
- * kind === 'recurrent_state' 时 matrix 为 [H, D, D] 或 [D, D]，
- * summary/head_norms 为各头范数，delta 为相对上一步的变化。
+ * kind === 'recurrent_state' 时由适配器定义 matrix/summary 等载荷；
+ * Mamba 等模型的递归状态组件放在 meta.components，面板按组件通用渲染。
  */
 export interface InternalState {
   kind: 'attention' | 'recurrent_state';
@@ -47,7 +56,16 @@ export interface InternalState {
   summary?: number[] | null;
   delta?: number[] | null;
   head_norms?: number[] | null;
-  meta?: Record<string, unknown>;
+  meta?: {
+    components?: RecurrentStateComponent[];
+    model_id?: string;
+    d_inner?: number;
+    state_size?: number;
+    conv_kernel?: number;
+    prompt_limit?: number;
+    max_new_tokens?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface SingleStepInspectRequest {
