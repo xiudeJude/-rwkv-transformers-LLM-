@@ -1198,6 +1198,30 @@ export function App() {
           )}
         </section>
 
+        {streamStatus === 'creating_session' && (
+          <section className="bg-indigo-500/10 rounded-xl border border-indigo-500/30 p-4 shadow-lg" aria-live="polite">
+            <div className="flex items-start gap-3">
+              <RefreshCw className="w-5 h-5 text-indigo-300 animate-spin shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-semibold text-indigo-200">
+                    正在加载模型并初始化会话...
+                  </span>
+                  <span className="font-mono text-[10px] text-indigo-300/80 whitespace-nowrap">
+                    {MODEL_DISPLAY_NAMES[modelArch]} · {engineStatusLabel}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-indigo-950">
+                  <div className="h-full w-1/2 rounded-full bg-gradient-to-r from-indigo-500 via-sky-400 to-indigo-500 animate-pulse" />
+                </div>
+                <p className="mt-2 text-[10px] text-slate-400">
+                  首次生成需要加载模型权重，可能等待 10-30 秒；加载完成后会自动开始生成，请勿重复点击。
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* AI Response Status Banner */}
         <section className="bg-slate-900/80 rounded-xl border border-slate-800 p-4 shadow-lg flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-3">
