@@ -33,7 +33,7 @@ async def memory_growth(req: MemoryGrowthRequest):
     try:
         from .routes import release_global_engines
 
-        release_global_engines()
+        await asyncio.to_thread(release_global_engines)
         return await asyncio.to_thread(
             concept_lab.run_memory_growth, req.prompt, req.lengths
         )
@@ -58,7 +58,7 @@ async def sample_logits(req: SampleRequest):
     try:
         from .routes import release_global_engines
 
-        release_global_engines()
+        await asyncio.to_thread(release_global_engines)
         return await asyncio.to_thread(
             concept_lab.sample_topk_logits, req.prompt, req.model_type
         )

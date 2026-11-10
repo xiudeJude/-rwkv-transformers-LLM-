@@ -78,29 +78,32 @@ async def health():
 async def model_info(model_type: str = Query("transformer", description="'transformer', 'rwkv' or 'mamba'")):
     try:
         if model_type == "rwkv":
-            engine = get_rwkv_engine()
+            engine = await asyncio.to_thread(get_rwkv_engine)
         elif model_type == "mamba":
-            engine = get_mamba_engine()
+            engine = await asyncio.to_thread(get_mamba_engine)
         else:
-            engine = get_engine()
-        return engine.get_metadata()
+            engine = await asyncio.to_thread(get_engine)
+        return await asyncio.to_thread(engine.get_metadata)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/api/inspect/single-step", response_model=SingleStepInspectResponse)
 async def inspect_single_step(req: SingleStepInspectRequest):
     try:
-        engine = get_engine()
+        engine = await asyncio.to_thread(get_engine)
         # If user explicitly requested a different model, load it if needed
         if req.model_name and req.model_name != engine.model_id:
-            engine.load_model(req.model_name, device=settings.DEVICE)
+            await asyncio.to_thread(
+                engine.load_model, req.model_name, device=settings.DEVICE
+            )
 
-        result = engine.inspect_single_step(
+        result = await asyncio.to_thread(
+            engine.inspect_single_step,
             prompt=req.prompt,
             layer=req.layer,
             head=req.head,
             top_k=req.top_k,
-            temperature=req.temperature
+            temperature=req.temperature,
         )
         return result
     except Exception as e:
@@ -116,14 +119,17 @@ mamba_session_manager = SessionManager()
 @router.post("/api/session/create")
 async def create_session(req: CreateSessionRequest):
     try:
-        engine = get_engine()
-        session = session_manager.create_session(engine)
-        prefill_result = session.prefill(
+        engine = await asyncio.to_thread(get_engine)
+        session = await asyncio.to_thread(session_manager.create_session, engine)
+        prefill_result = await asyncio.to_thread(
+            session.prefill,
             prompt=req.prompt,
             target_layer=req.layer,
-            target_head=req.head
+            target_head=req.head,
         )
-        state = session.export_state(step=0, layer=req.layer, head=req.head)
+        state = await asyncio.to_thread(
+            session.export_state, step=0, layer=req.layer, head=req.head
+        )
         return {
             "status": "success",
             "session_id": session.session_id,
@@ -139,14 +145,16 @@ async def session_step(session_id: str, req: StepRequest):
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found or expired")
     try:
-        step_result = session.step(
+        step_result = await asyncio.to_thread(
+            session.step,
             temperature=req.temperature,
             top_k=req.top_k,
             repetition_penalty=req.repetition_penalty,
             target_layer=req.layer,
-            target_head=req.head
+            target_head=req.head,
         )
-        state = session.export_state(
+        state = await asyncio.to_thread(
+            session.export_state,
             step=session.step_count,
             layer=req.layer,
             head=req.head,
@@ -180,8 +188,12 @@ async def get_session_attention(
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found or expired")
     try:
-        detail = session.get_attention_detail(step=step, layer=layer, head=head)
-        state = session.export_state(step=step, layer=layer, head=head)
+        detail = await asyncio.to_thread(
+            session.get_attention_detail, step=step, layer=layer, head=head
+        )
+        state = await asyncio.to_thread(
+            session.export_state, step=step, layer=layer, head=head
+        )
         return {
             "status": "success",
             **detail,
@@ -340,13 +352,16 @@ async def session_websocket_stream(websocket: WebSocket, session_id: str):
 @router.post("/api/rwkv/session/create")
 async def create_rwkv_session(req: CreateSessionRequest):
     try:
-        engine = get_rwkv_engine()
-        session = rwkv_session_manager.create_session(engine)
-        prefill_result = session.prefill(
+        engine = await asyncio.to_thread(get_rwkv_engine)
+        session = await asyncio.to_thread(rwkv_session_manager.create_session, engine)
+        prefill_result = await asyncio.to_thread(
+            session.prefill,
             prompt=req.prompt,
-            target_layer=req.layer
+            target_layer=req.layer,
         )
-        state = session.export_state(step=0, layer=req.layer, head=None, include_matrix=False)
+        state = await asyncio.to_thread(
+            session.export_state, step=0, layer=req.layer, head=None, include_matrix=False
+        )
         return {
             "status": "success",
             "session_id": session.session_id,
@@ -362,13 +377,15 @@ async def session_rwkv_step(session_id: str, req: StepRequest):
     if not session:
         raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found or expired")
     try:
-        step_result = session.step(
+        step_result = await asyncio.to_thread(
+            session.step,
             temperature=req.temperature,
             top_k=req.top_k,
             repetition_penalty=req.repetition_penalty,
-            target_layer=req.layer
+            target_layer=req.layer,
         )
-        state = session.export_state(
+        state = await asyncio.to_thread(
+            session.export_state,
             step=session.step_count,
             layer=req.layer,
             head=req.head,
@@ -401,11 +418,17 @@ async def get_session_rwkv_state(
     if not session:
         raise HTTPException(status_code=404, detail=f"RWKV Session {session_id} not found or expired")
     try:
-        detail = session.get_rwkv_state(step=step, layer=layer, head=head)
+        detail = await asyncio.to_thread(
+            session.get_rwkv_state, step=step, layer=layer, head=head
+        )
         # 已有 legacy matrix；仅在指定 head（Level 2 弹窗）时让统一状态也携带矩阵，
         # 避免全层回填时重复传输 16x64x64 数据。
-        state = session.export_state(
-            step=step, layer=layer, head=head, include_matrix=head is not None
+        state = await asyncio.to_thread(
+            session.export_state,
+            step=step,
+            layer=layer,
+            head=head,
+            include_matrix=head is not None,
         )
         payload = {"status": "success", **detail, "state": _dump_state(state)}
         return Response(content=orjson.dumps(payload), media_type="application/json")
@@ -556,13 +579,16 @@ async def session_rwkv_websocket_stream(websocket: WebSocket, session_id: str):
 @router.post("/api/mamba/session/create")
 async def create_mamba_session(req: CreateSessionRequest):
     try:
-        engine = get_mamba_engine()
-        session = mamba_session_manager.create_session(engine)
-        prefill_result = session.prefill(
+        engine = await asyncio.to_thread(get_mamba_engine)
+        session = await asyncio.to_thread(mamba_session_manager.create_session, engine)
+        prefill_result = await asyncio.to_thread(
+            session.prefill,
             prompt=req.prompt,
             target_layer=req.layer,
         )
-        state = session.export_state(step=0, layer=req.layer, include_matrix=False)
+        state = await asyncio.to_thread(
+            session.export_state, step=0, layer=req.layer, include_matrix=False
+        )
         return {
             "status": "success",
             "session_id": session.session_id,
@@ -579,13 +605,15 @@ async def session_mamba_step(session_id: str, req: StepRequest):
     if not session:
         raise HTTPException(status_code=404, detail=f"Mamba Session {session_id} not found or expired")
     try:
-        step_result = session.step(
+        step_result = await asyncio.to_thread(
+            session.step,
             temperature=req.temperature,
             top_k=req.top_k,
             repetition_penalty=req.repetition_penalty,
             target_layer=req.layer,
         )
-        state = session.export_state(
+        state = await asyncio.to_thread(
+            session.export_state,
             step=session.step_count,
             layer=req.layer,
             include_matrix=False,
@@ -616,7 +644,9 @@ async def get_mamba_session_state(
     if not session:
         raise HTTPException(status_code=404, detail=f"Mamba Session {session_id} not found or expired")
     try:
-        state = session.export_state(step=step, layer=layer, include_matrix=False)
+        state = await asyncio.to_thread(
+            session.export_state, step=step, layer=layer, include_matrix=False
+        )
         return {"status": "success", "session_id": session_id, "state": _dump_state(state)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
