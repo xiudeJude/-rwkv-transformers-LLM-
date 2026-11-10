@@ -72,9 +72,9 @@ def compute_attention_kl_divergence(
 
 DEFAULT_BENCHMARK_PROMPTS = [
     "Language models are capable of generalizing across varied tasks.",
-    "大语言模型的可解释性分析有助于深入理解注意力头的分工机制。",
     "The transformer architecture relies on self-attention to model long-range context.",
-    "混合状态空间与注意力机制的架构设计兼顾了计算吞吐与长文本保真度。"
+    "Quantization reduces memory usage but can change the model's output distribution.",
+    "A fair comparison uses the same tokenized prompt and evaluates the full vocabulary.",
 ]
 
 
@@ -127,11 +127,13 @@ def run_benchmark(
         attn_self_kl = compute_attention_kl_divergence(attn_p, attn_p)
         assert abs(attn_self_kl) < 1e-6
 
-        results["validation_status"] = "PASSED_SELF_CHECK"
+        results["validation_status"] = "SELF_CHECK_ONLY_NO_BASELINE"
         results["notes"] = (
-            "未量化全量权重缺失，已完成散度计算引擎的数值稳定性自检验与数学约束验证。"
-            "复现双模型端到端对比请使用 --unquantized-path 指定 safetensors 权重目录。"
+            "未量化全量权重缺失，只完成了散度计算引擎的数值自检；"
+            "这不等于 KL 已验证。复现双模型端到端对比请使用 --unquantized-path "
+            "指定 safetensors 权重目录。"
         )
+        print("自检完成: PASSED_SELF_CHECK（仅函数自检，未测量 KL）")
         return results
 
     # 当未量化模型存在时执行实际对比
@@ -144,32 +146,42 @@ def run_benchmark(
     quant_engine.load_model(quantized_path, device=device)
 
     logits_kl_list = []
+    prompt_results: List[Dict[str, Any]] = []
     attn_kl_by_layer: Dict[int, List[float]] = {}
 
     for prompt in prompts:
-        # 1. 基准模型推理
+        # 1. 用未量化模型的 tokenizer 生成一次 token id，两个模型使用同一组 id。
         t_base = base_engine.tokenize(prompt)
-        input_ids_base = t_base["input_ids"].to(device)
-        with torch.no_grad():
-            out_base = base_engine.model(input_ids=input_ids_base, output_attentions=True)
-
-        # 2. 量化模型推理
+        input_ids = t_base["input_ids"].to(device)
+        token_ids = t_base["token_ids"]
         t_quant = quant_engine.tokenize(prompt)
-        input_ids_quant = t_quant["input_ids"].to(device)
-        with torch.no_grad():
-            out_quant = quant_engine.model(input_ids=input_ids_quant, output_attentions=True)
+        token_ids_match = token_ids == t_quant["token_ids"]
 
-        # 计算 logits KL 散度
-        l_kl = compute_logits_kl_divergence(out_base.logits[:, -1, :], out_quant.logits[:, -1, :])
+        with torch.no_grad():
+            out_base = base_engine.model(input_ids=input_ids, output_attentions=True)
+            out_quant = quant_engine.model(input_ids=input_ids, output_attentions=True)
+
+        # 2. 全词表 logits KL
+        l_kl = compute_logits_kl_divergence(
+            out_base.logits[:, -1, :], out_quant.logits[:, -1, :]
+        )
         logits_kl_list.append(l_kl)
 
-        # 计算各层 attention KL 散度
+        prompt_attn_kl: Dict[int, float] = {}
         if out_base.attentions and out_quant.attentions:
             for l_idx, (a_b, a_q) in enumerate(zip(out_base.attentions, out_quant.attentions)):
                 layer_kl = compute_attention_kl_divergence(a_b, a_q)
-                if l_idx not in attn_kl_by_layer:
-                    attn_kl_by_layer[l_idx] = []
-                attn_kl_by_layer[l_idx].append(layer_kl)
+                prompt_attn_kl[l_idx] = round(layer_kl, 6)
+                attn_kl_by_layer.setdefault(l_idx, []).append(layer_kl)
+
+        prompt_results.append({
+            "prompt": prompt,
+            "prompt_tokens": len(token_ids),
+            "token_ids_match": token_ids_match,
+            "logits_full_vocab": True,
+            "logits_kl": round(l_kl, 6),
+            "attention_kl_by_layer": prompt_attn_kl,
+        })
 
     mean_logits_kl = sum(logits_kl_list) / len(logits_kl_list)
     mean_attn_kl_by_layer = {
@@ -177,12 +189,27 @@ def run_benchmark(
     }
 
     results["has_unquantized_baseline"] = True
+    results["prompt_count"] = len(prompt_results)
+    results["prompt_results"] = prompt_results
+    results["prompt_lengths"] = [item["prompt_tokens"] for item in prompt_results]
+    results["logits_full_vocab"] = True
+    results["vocab_size"] = int(out_base.logits.shape[-1])
     results["mean_logits_kl"] = round(mean_logits_kl, 6)
+    results["max_logits_kl"] = round(max(logits_kl_list), 6)
+    results["min_logits_kl"] = round(min(logits_kl_list), 6)
     results["mean_attention_kl_by_layer"] = mean_attn_kl_by_layer
-    results["validation_status"] = "PASSED_EMPIRICAL_MEASUREMENT"
+    results["validation_status"] = "REAL_KL_MEASURED"
 
     print("\n--- 实测 KL 散度对比结果 ---")
+    for item in prompt_results:
+        print(
+            f"prompt_tokens={item['prompt_tokens']} token_ids_match={item['token_ids_match']} "
+            f"logits_kl={item['logits_kl']} prompt={item['prompt']}"
+        )
     print(f"Logits 平均 KL 散度: {results['mean_logits_kl']}")
+    print(f"Logits 最大 KL 散度: {results['max_logits_kl']}")
+    print(f"Logits 最小 KL 散度: {results['min_logits_kl']}")
+    print(f"全词表 logits: {results['logits_full_vocab']} (vocab_size={results['vocab_size']})")
     print(f"各 Full Attention 层平均 KL 散度: {results['mean_attention_kl_by_layer']}")
     return results
 

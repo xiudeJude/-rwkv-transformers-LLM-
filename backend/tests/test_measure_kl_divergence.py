@@ -58,7 +58,7 @@ def test_benchmark_runner_self_check():
         device="cpu"
     )
     assert res["has_unquantized_baseline"] is False
-    assert res["validation_status"] == "PASSED_SELF_CHECK"
+    assert res["validation_status"] == "SELF_CHECK_ONLY_NO_BASELINE"
     print("  -> Benchmark runner handled missing baseline gracefully with transparent guidance: OK", flush=True)
 
 
@@ -69,7 +69,8 @@ def test_measure_script_cli():
     cmd = [
         sys.executable,
         os.path.join(backend_dir, "scripts", "manual", "measure_kl_divergence.py"),
-        "--device", "cpu"
+        "--device", "cpu",
+        "--unquantized-path", "non_existent_unquantized_model_dir",
     ]
     proc = subprocess.run(
         cmd,
