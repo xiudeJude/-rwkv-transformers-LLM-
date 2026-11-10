@@ -357,7 +357,17 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
                     {model.available ? (
                       <>
                         <p className="mt-1 leading-relaxed">{model.cache_series_note}</p>
-                        <p className="mt-1 text-slate-500 font-mono">dtype: {first?.dtype_label || '—'}</p>
+                        <p className="mt-1 text-slate-500 font-mono">缓存 dtype: {first?.dtype_label || '—'}</p>
+                        {model.model_type === 'transformer' && (
+                          <p className="mt-1 text-slate-500 leading-relaxed">
+                            实测：KV keys/values bfloat16 · conv_states bfloat16 · recurrent_states float32
+                          </p>
+                        )}
+                        {model.model_type === 'attention_baseline' && (
+                          <p className="mt-1 text-slate-500 leading-relaxed">
+                            实测：{fullLayers.length} 层 keys/values 均为 bfloat16
+                          </p>
+                        )}
                         {first && (
                           <p className="mt-1 text-slate-500 font-mono leading-relaxed">
                             L={first.length}: cache {formatBytes(first.cache_bytes)} · kv {formatBytes(first.kv_bytes)} · linear {formatBytes(first.linear_state_bytes)}
