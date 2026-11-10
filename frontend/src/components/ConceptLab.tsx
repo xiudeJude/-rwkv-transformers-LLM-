@@ -218,18 +218,19 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
                   d={line(measured.map((item) => item.kv_bytes), measured.map((item) => item.length))}
                   fill="none"
                   stroke={color}
-                  strokeWidth="1.2"
-                  opacity="0.95"
+                  strokeWidth="4.2"
+                  strokeLinecap="round"
+                  opacity="0.9"
                 />
               )}
               {model.theoretical?.available && model.theoretical.values.length > 0 && (
                 <path
                   d={line(model.theoretical.values, model.theoretical.lengths ?? measured.map((item) => item.length))}
                   fill="none"
-                  stroke={color}
-                  strokeWidth="1.4"
-                  strokeDasharray="2 3"
-                  opacity="0.65"
+                  stroke="#e2e8f0"
+                  strokeWidth="1.2"
+                  strokeDasharray="2 4"
+                  opacity="0.95"
                 />
               )}
             </g>
@@ -246,12 +247,12 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
           </span>
         ))}
         <span className="flex items-center gap-1.5 text-slate-500">
-          <span className="w-4 h-0.5 bg-slate-400" />
-          实际 kv_bytes（混合架构细线）
+          <span className="w-4 h-1 rounded bg-slate-400" />
+          实际 kv_bytes（粗线）
         </span>
         <span className="flex items-center gap-1.5 text-slate-500">
-          <span className="w-4 h-0.5 border-t border-dashed border-slate-400" />
-          理论 KV
+          <span className="w-4 h-0.5 border-t border-dashed border-slate-200" />
+          理论 KV（细白虚线，与粗线重合即逐点相等）
         </span>
         <span className="flex items-center gap-1.5 text-slate-500">
           <span className="w-4 h-0.5 border-t border-dashed border-slate-500" />
@@ -400,9 +401,15 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
                 );
               })}
             </div>
-            <div className="text-[10px] text-slate-500 leading-relaxed">
-              理论 KV = 2 × KV层数 × KV头数 × 头维度 × 序列长度 × 每元素字节数，参数从模型 config 读取。Qwen3.5 只对 full_attention 层做理论比较，线性层递归状态单独计入 linear_state_bytes。
-              RWKV/Mamba 超过 512 的点为“结构恒定（未实测）”，不是测量值。
+            <div className="text-[10px] text-slate-500 leading-relaxed space-y-1">
+              <p>
+                图中粗线是实际 kv_bytes，细白虚线是理论 KV；两者重合表示逐点相等。Qwen3.5 的 kv_bytes 与 Qwen2.5 的总缓存数值相同，是因为 config 中
+                KV层数 × KV头数 × 头维度的乘积相同：Qwen3.5 为 6 × 2 × 256 = 3,072，Qwen2.5 为 24 × 2 × 64 = 3,072；再乘 K/V 两份与 2 B，二者都是 12,288 B/token。
+              </p>
+              <p>
+                理论 KV = 2 × KV层数 × KV头数 × 头维度 × 序列长度 × 每元素字节数，参数从模型 config 读取。Qwen3.5 只对 full_attention 层做理论比较，线性层递归状态单独计入 linear_state_bytes。
+                RWKV/Mamba 超过 512 的点为“结构恒定（未实测）”，不是测量值。
+              </p>
             </div>
           </div>
         )}
