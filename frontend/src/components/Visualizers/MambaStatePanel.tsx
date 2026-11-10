@@ -124,7 +124,7 @@ export const MambaStatePanel: React.FC<MambaStatePanelProps> = ({
             </span>
           </h3>
           <p className="text-[10px] text-slate-500">
-            由统一 InternalState 驱动，按 meta.components 通用渲染；展示的是状态范数摘要，不是注意力权重或 RWKV head。
+            由 InternalState 驱动，按 meta.components 通用渲染；展示的是状态范数摘要，不是注意力权重或 RWKV head。
           </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
