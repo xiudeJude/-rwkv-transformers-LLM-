@@ -24,6 +24,12 @@
 ![Level 2 状态探针](docs/screenshots/03-level2-probe.png)
 *Level 2 探针：单头 64×64 原始 WKV 状态矩阵，4,096 个权重点*
 
+### 3. 概念实验室
+
+顶部新增独立的“概念实验室”入口，与三个架构 Tab 并列。包含状态/内存增长、
+三 tokenizer 分词对比、真实 logits 的采样分布实验；数据来源与限制见
+[`docs/concept-lab.md`](docs/concept-lab.md)。
+
 ### 2. 双引擎双通道数据流架构
 
 ```mermaid

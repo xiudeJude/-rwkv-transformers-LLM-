@@ -94,14 +94,16 @@ O(L²) 注意力矩阵。Level 2 按需查询使用默认值 `True`。
 | 字段 | 类型 | 含义 |
 | :--- | :--- | :--- |
 | `kind` | `str` | `"attention"` 或 `"recurrent_state"` |
-| `model_type` | `str` | 适配器注册名，如 `"transformer"` / `"rwkv"` |
+| `model_type` | `str` | 适配器注册名，如 `"transformer"` / `"rwkv"` / `"mamba"` |
 | `layer` | `int` | 目标层 |
 | `head` | `int \| null` | 目标头；为 null 表示整层/全部头 |
 | `num_layers` | `int` | 模型总层数 |
 | `num_heads` | `int` | 模型总头数 |
 | `seq_len` | `int` | 当前序列长度 |
 | `step` | `int` | 0 表示 prefill，1..N 表示 decode 步 |
-| `state_bytes` | `int` | 导出状态实际占用字节数 |
+| `state_bytes` | `int` | 兼容字段，等于 `cache_bytes + viz_history_bytes` |
+| `cache_bytes` | `int` | 推理本身必需的缓存字节数（KV Cache / 递归状态 / Mamba 状态） |
+| `viz_history_bytes` | `int` | 仅为可视化额外保存的历史字节数 |
 | `tokens` | `List[str]` | token 文本 |
 | `token_ids` | `List[int]` | token id |
 | `shape` | `List[int]` | 状态张量形状 |
@@ -114,11 +116,25 @@ O(L²) 注意力矩阵。Level 2 按需查询使用默认值 `True`。
 
 ### 3.1 state_bytes 的语义
 
-- Transformer：KV Cache、prefill 注意力历史、decode 注意力历史的字节数之和。
-- RWKV：当前导出层/头的 WKV 状态张量字节数（请求头时只算该头）。
+`state_bytes` 保持向后兼容，等于 `cache_bytes + viz_history_bytes`：
+
+- Transformer：
+  - `cache_bytes` = 实际 `past_key_values` 字节数（Qwen 混合架构中可能包含
+    线性层递归状态，以实测为准）；
+  - `viz_history_bytes` = prefill 注意力历史 + decode 注意力历史字节数。
+- RWKV：
+  - `cache_bytes` = 当前完整递归状态 `current_state` 字节数；
+  - `viz_history_bytes` = `history_states` 总字节数减去当前状态字节数，
+    避免与推理缓存重复计数。
+- Mamba：
+  - `cache_bytes` = conv_state + ssm_state 张量字节数；
+  - `viz_history_bytes` 当前为 0（只保存轻量摘要，不保存张量历史）。
 - 计算函数 `estimate_state_bytes()` 递归张量、list/tuple/dict，并遍历缓存对象的
   公开字段（兼容 `DynamicCache.layers[i].keys/values`、`key_cache`、`value_cache`
   等不同版本布局）；遇到 `nn.Module`、类对象和配置元数据时剪枝，不会遍历模型计算图。
+
+概念实验室的 A 卡片直接使用 `cache_bytes` 绘制三种架构的内存增长曲线；
+字段拆分与数据来源见 `docs/concept-lab.md`。
 
 ### 3.2 前端消费方式
 
