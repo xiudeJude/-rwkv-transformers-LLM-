@@ -6,9 +6,11 @@ from ..core.schemas import SingleStepInspectRequest, SingleStepInspectResponse, 
 from ..core.config import settings
 from ..models.adapter_base import ModelAdapter
 from ..models.adapter_registry import create_adapter
-# Importing the adapter modules registers "transformer" / "rwkv" in the registry.
+# Importing the adapter modules registers "transformer" / "rwkv" / "mamba"
+# in the registry.
 from ..models.transformer import TransformerAdapter
 from ..models.rwkv_engine import RWKVAdapter
+from ..models.mamba_engine import MambaAdapter, MAMBA_MAX_NEW_TOKENS
 from ..models.rwkv_session import rwkv_session_manager
 
 router = APIRouter()
@@ -16,6 +18,7 @@ router = APIRouter()
 # Global inference engine instances
 _engine: Optional[ModelAdapter] = None
 _rwkv_engine: Optional[ModelAdapter] = None
+_mamba_engine: Optional[ModelAdapter] = None
 
 def get_engine() -> ModelAdapter:
     global _engine
@@ -33,6 +36,14 @@ def get_rwkv_engine() -> ModelAdapter:
     return _rwkv_engine
 
 
+def get_mamba_engine() -> ModelAdapter:
+    global _mamba_engine
+    if _mamba_engine is None:
+        _mamba_engine = create_adapter(settings.MAMBA_MODEL_TYPE)
+        _mamba_engine.load_model(settings.DEFAULT_MAMBA, device=settings.DEVICE)
+    return _mamba_engine
+
+
 def _dump_state(state: InternalState) -> Dict[str, Any]:
     """统一状态对象 -> JSON 友好的 dict。"""
     return state.model_dump()
@@ -42,10 +53,12 @@ async def health():
     return {"status": "ok", "app": settings.APP_NAME}
 
 @router.get("/api/model/info", response_model=ModelMetadata)
-async def model_info(model_type: str = Query("transformer", description="'transformer' or 'rwkv'")):
+async def model_info(model_type: str = Query("transformer", description="'transformer', 'rwkv' or 'mamba'")):
     try:
         if model_type == "rwkv":
             engine = get_rwkv_engine()
+        elif model_type == "mamba":
+            engine = get_mamba_engine()
         else:
             engine = get_engine()
         return engine.get_metadata()
@@ -72,7 +85,11 @@ async def inspect_single_step(req: SingleStepInspectRequest):
         raise HTTPException(status_code=500, detail=f"Inspection failed: {str(e)}")
 
 from ..core.schemas import CreateSessionRequest, StepRequest
-from ..models.session import session_manager
+from ..models.session import session_manager, SessionManager
+
+# Mamba uses the generic session wrapper; keep a separate manager so its
+# TTL/LRU budget is independent from the Transformer sessions.
+mamba_session_manager = SessionManager()
 
 @router.post("/api/session/create")
 async def create_session(req: CreateSessionRequest):
@@ -509,3 +526,211 @@ async def session_rwkv_websocket_stream(websocket: WebSocket, session_id: str):
             pass
 
 
+
+# ==========================================
+# Mamba Session & Streaming Endpoints
+# ==========================================
+
+@router.post("/api/mamba/session/create")
+async def create_mamba_session(req: CreateSessionRequest):
+    try:
+        engine = get_mamba_engine()
+        session = mamba_session_manager.create_session(engine)
+        prefill_result = session.prefill(
+            prompt=req.prompt,
+            target_layer=req.layer,
+        )
+        state = session.export_state(step=0, layer=req.layer, include_matrix=False)
+        return {
+            "status": "success",
+            "session_id": session.session_id,
+            "prefill_state": prefill_result,
+            "state": _dump_state(state),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Mamba Prefill failed: {str(e)}")
+
+
+@router.post("/api/mamba/session/{session_id}/step")
+async def session_mamba_step(session_id: str, req: StepRequest):
+    session = mamba_session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Mamba Session {session_id} not found or expired")
+    try:
+        step_result = session.step(
+            temperature=req.temperature,
+            top_k=req.top_k,
+            repetition_penalty=req.repetition_penalty,
+            target_layer=req.layer,
+        )
+        state = session.export_state(
+            step=session.step_count,
+            layer=req.layer,
+            include_matrix=False,
+        )
+        return {
+            "status": "success",
+            "session_id": session_id,
+            **step_result,
+            "state": _dump_state(state),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Mamba Step failed: {str(e)}")
+
+
+@router.post("/api/mamba/session/{session_id}/close")
+async def close_mamba_session(session_id: str):
+    success = mamba_session_manager.close_session(session_id)
+    return {"status": "closed", "session_id": session_id, "already_closed": not success}
+
+
+@router.get("/api/mamba/session/{session_id}/state")
+async def get_mamba_session_state(
+    session_id: str,
+    step: Optional[int] = Query(None, description="Step number (0 for prefill, 1..N for decode steps)"),
+    layer: int = Query(0, description="Target layer index"),
+):
+    session = mamba_session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Mamba Session {session_id} not found or expired")
+    try:
+        state = session.export_state(step=step, layer=layer, include_matrix=False)
+        return {"status": "success", "session_id": session_id, "state": _dump_state(state)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.websocket("/ws/mamba/session/{session_id}/stream")
+async def session_mamba_websocket_stream(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    session = mamba_session_manager.get_session(session_id)
+    if not session:
+        await websocket.send_json({"type": "error", "message": f"Mamba Session {session_id} not found or expired"})
+        await websocket.close(code=1008)
+        return
+
+    stop_event = asyncio.Event()
+    listener_task: Optional[asyncio.Task] = None
+
+    try:
+        msg = await websocket.receive_json()
+        action = msg.get("action")
+        if action != "start":
+            await websocket.send_json({"type": "error", "message": f"Expected action 'start', got '{action}'"})
+            await websocket.close(code=1008)
+            return
+
+        temperature = float(msg.get("temperature", 0.7))
+        top_k = int(msg.get("top_k", 10))
+        repetition_penalty = float(msg.get("repetition_penalty", 1.2))
+        max_new_tokens = int(msg.get("max_new_tokens", 50))
+        target_layer = int(msg.get("layer", 0))
+
+        if max_new_tokens <= 0 or max_new_tokens > MAMBA_MAX_NEW_TOKENS:
+            await websocket.send_json({
+                "type": "error",
+                "message": (
+                    f"非法参数: Mamba 纯 PyTorch 参考路径的 max_new_tokens "
+                    f"上限为 {MAMBA_MAX_NEW_TOKENS}，收到 {max_new_tokens}"
+                )
+            })
+            await websocket.close()
+            return
+
+        async def client_listener():
+            try:
+                while not stop_event.is_set():
+                    c_msg = await websocket.receive_json()
+                    c_action = c_msg.get("action")
+                    if c_action in ("close", "stop"):
+                        stop_event.set()
+                        break
+            except WebSocketDisconnect:
+                stop_event.set()
+            except Exception:
+                stop_event.set()
+
+        listener_task = asyncio.create_task(client_listener())
+
+        tokens_generated = 0
+        while tokens_generated < max_new_tokens and not session.is_finished:
+            if stop_event.is_set():
+                print(f"[WebSocket Mamba] Stop/disconnect signal detected for session {session_id}")
+                break
+
+            step_res = await asyncio.to_thread(
+                session.step,
+                temperature=temperature,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                target_layer=target_layer,
+            )
+            if stop_event.is_set():
+                print(f"[WebSocket Mamba] Stop signal processed after step for session {session_id}")
+                break
+            tokens_generated += 1
+
+            state = await asyncio.to_thread(
+                session.export_state,
+                step=step_res["step"],
+                layer=target_layer,
+                include_matrix=False,
+            )
+            payload = {
+                "type": "token_step",
+                "step": step_res["step"],
+                "token": step_res["token"],
+                "token_id": step_res["token_id"],
+                "token_prob": step_res["token_prob"],
+                "topk_candidates": step_res["topk_candidates"],
+                "state": _dump_state(state),
+                "is_finished": step_res["is_finished"],
+            }
+            await websocket.send_json(payload)
+
+            if step_res["is_finished"]:
+                break
+
+            await asyncio.sleep(0.001)
+
+        if not session.is_finished and not stop_event.is_set():
+            session.is_finished = True
+            state = await asyncio.to_thread(
+                session.export_state,
+                step=session.step_count,
+                layer=target_layer,
+                include_matrix=False,
+            )
+            await websocket.send_json({
+                "type": "token_step",
+                "step": session.step_count,
+                "token": "",
+                "token_id": -1,
+                "token_prob": 0.0,
+                "topk_candidates": [],
+                "state": _dump_state(state),
+                "is_finished": True,
+                "finish_reason": "max_new_tokens",
+            })
+
+        while not stop_event.is_set():
+            await asyncio.sleep(0.05)
+
+    except WebSocketDisconnect:
+        print(f"[WebSocket Mamba] Client disconnected for session {session_id}.")
+    except Exception as e:
+        print(f"[WebSocket Mamba Error] Exception in stream: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": f"Mamba Inference stream failed: {str(e)}"})
+        except Exception:
+            pass
+    finally:
+        stop_event.set()
+        if listener_task and not listener_task.done():
+            listener_task.cancel()
+        print(f"[WebSocket Mamba] Releasing session {session_id} and freeing GPU VRAM.")
+        mamba_session_manager.close_session(session_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass

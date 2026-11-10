@@ -20,6 +20,7 @@ class Settings:
     # 默认模型相对路径 (位于 backend/models/ 下)
     _DEFAULT_TRANSFORMER_PATH = os.path.join(BACKEND_DIR, "models", "Qwen3.5-0.8B-GGUF")
     _DEFAULT_RWKV_PATH = os.path.join(BACKEND_DIR, "models", "rwkv7-g1d-0.4b-20260210-ctx8192.pth")
+    _DEFAULT_MAMBA_PATH = "state-spaces/mamba-130m-hf"
 
     @property
     def DEFAULT_TRANSFORMER(self) -> str:
@@ -38,6 +39,16 @@ class Settings:
         if not os.path.isabs(path) and not path.startswith("http"):
             resolved = os.path.abspath(os.path.join(BACKEND_DIR, path))
             if os.path.exists(resolved) or os.path.exists(resolved + ".pth"):
+                return resolved
+        return path
+
+    @property
+    def DEFAULT_MAMBA(self) -> str:
+        """Mamba 权重路径；默认使用 Hugging Face 模型 ID，也支持本地目录。"""
+        path = os.getenv("DEFAULT_MAMBA", self._DEFAULT_MAMBA_PATH)
+        if not os.path.isabs(path) and not path.startswith("http"):
+            resolved = os.path.abspath(os.path.join(BACKEND_DIR, path))
+            if os.path.exists(resolved):
                 return resolved
         return path
 
@@ -76,6 +87,11 @@ class Settings:
     def RWKV_MODEL_TYPE(self) -> str:
         """RWKV 侧模型适配器类型名，注册表据此创建 RWKV 侧引擎。"""
         return os.getenv("RWKV_MODEL_TYPE", "rwkv")
+
+    @property
+    def MAMBA_MODEL_TYPE(self) -> str:
+        """Mamba 侧模型适配器类型名，注册表据此创建 Mamba 侧引擎。"""
+        return os.getenv("MAMBA_MODEL_TYPE", "mamba")
 
     @property
     def DEVICE(self) -> str:
