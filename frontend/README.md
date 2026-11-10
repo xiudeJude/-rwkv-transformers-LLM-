@@ -1,6 +1,6 @@
 # LLM 可解释性交互工坊 - 前端交互工作台
 
-本项目为“LLM 可解释性交互工坊（Transformer vs RWKV 双范式对比）”的前端交互界面，基于 **React 19**、**TypeScript**、**Tailwind CSS** 与 **Vite** 构建，提供 60 FPS 硬件加速的流式大模型内部隐状态演化可视化。
+本项目为“LLM 可解释性交互工坊”的前端交互界面，覆盖 Transformer（Qwen3.5 混合）、RWKV-7 与 Mamba 三类架构，并提供独立的概念实验室。界面基于 **React 19**、**TypeScript**、**Tailwind CSS** 与 **Vite** 构建，提供 60 FPS 硬件加速的流式大模型内部隐状态演化可视化。
 
 ---
 
@@ -13,6 +13,8 @@
 | **`RWKVStateModal.tsx`** | Level 2 微观状态探针模态窗 | 点击历史步弹出，通过按需优化接口（~8ms）提取单头 $64 \times 64$（4,096 权重）原始隐藏状态矩阵，透视微观特征分布 |
 | **`LayerHeadSelector.tsx`** | 层级与头维度交互控制器 | 动态适配 Transformer（24层/8头）与 RWKV（24层/16头）；生成中严格置灰锁定当前观测层，生成结束后解锁并支持并发全量回填 |
 | **`TopKBarChart.tsx`** | 实时首位预测与候选分布柱状图 | 呈现每一步 Decode 采样的 Top-K 候选词及其 Softmax 概率分布 |
+| **`MambaStatePanel.tsx`** | Mamba 递归状态面板 | 读取统一 `InternalState.meta.components`，展示 `conv_state` / `ssm_state` 的 shape、dtype、字节数与逐层范数，不伪造注意力 head |
+| **`ConceptLab.tsx`** | 概念实验室入口 | 四模型 prefill 缓存增长、三 tokenizer 分词对比、真实 top-50 logits 采样分布与本地重算；数据来源见根目录 `docs/concept-lab.md` |
 
 ---
 
