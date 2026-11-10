@@ -157,18 +157,9 @@ export function App() {
     });
   };
 
-  const storeArchMeta = (arch: ModelArch, data: ModelMetadata, updateLayer = false) => {
+  const storeArchMeta = (arch: ModelArch, data: ModelMetadata) => {
     setModelMetaByArch((prev) => ({ ...prev, [arch]: data }));
     setArchStatus(arch, 'ready');
-    if (
-      updateLayer &&
-      arch === 'transformer' &&
-      modelArchRef.current === 'transformer' &&
-      data.full_attn_layers &&
-      data.full_attn_layers.length > 0
-    ) {
-      setCurrentLayer(data.full_attn_layers[0]);
-    }
   };
 
   const refreshModelMeta = async (arch: ModelArch) => {
@@ -184,7 +175,7 @@ export function App() {
         throw new Error(`模型信息读取失败 (${res.status})`);
       }
       const data: ModelMetadata = await res.json();
-      storeArchMeta(arch, data, true);
+      storeArchMeta(arch, data);
     } catch {
       clearArchMeta(arch);
       setArchStatus(arch, 'error');
