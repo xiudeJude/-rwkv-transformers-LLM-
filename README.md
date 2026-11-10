@@ -137,6 +137,40 @@ HF_ENDPOINT=https://hf-mirror.com
 
 ---
 
+## 🧪 运行后端测试
+
+测试依赖单独放在 `backend/requirements-dev.txt`，不会污染运行时依赖：
+
+```bash
+# 在仓库根目录、已激活 .venv 的情况下安装测试依赖
+pip install -r backend/requirements-dev.txt
+```
+
+`backend/pytest.ini` 已设置 `asyncio_mode = auto`，因此不需要再手动加 `--asyncio-mode=auto`。
+
+```bash
+# 方式一：从仓库根目录运行全部后端测试
+pytest backend -q
+
+# 方式二：从 backend 目录运行
+cd backend
+pytest -q
+```
+
+注意事项：
+
+- 多数测试会加载 `backend/.env` 中配置的真实模型，请先完成上面的模型下载与环境变量配置。
+- `test_concurrency_attention.py`、`test_incremental_attention_stream.py`、`test_rwkv_stream_and_state.py` 会访问 `http://127.0.0.1:8000`，运行前需先启动后端服务（例如在 `backend` 目录执行 `python main.py`）。
+- 只运行不依赖外部服务的快速测试：
+  ```bash
+  pytest backend/tests/test_close_idempotent.py \
+         backend/tests/test_cors_config.py \
+         backend/tests/test_session_manager_ttl_lru.py \
+         backend/tests/test_measure_kl_divergence.py -q
+  ```
+
+---
+
 ## 📦 模型下载与存放指引
 
 本项目所需的两个模型权重均来源于官方公开经过实测验证的 Hugging Face 仓库。请下载并将权重放置于 `backend/models/` 目录下：
