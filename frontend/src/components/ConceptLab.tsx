@@ -173,7 +173,7 @@ const ConceptCard: React.FC<{
     </div>
     {children}
     <div className="border-t border-slate-800 pt-3 text-[11px] text-slate-500 leading-relaxed">
-      <span className="text-slate-400 font-medium">在三种架构里分别对应什么：</span>
+      <span className="text-slate-400 font-medium">三类架构、四个模型分别对应什么：</span>
       {mapping}
     </div>
   </section>
@@ -798,7 +798,7 @@ export const ConceptLab: React.FC<ConceptLabProps> = ({ apiBase }) => {
             </span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            用可交互的小实验解释三个架构共享或差异化的概念。数据来自真实适配器、真实 tokenizer 与真实 logits。
+            用可交互的小实验解释三类架构、四个模型共享或差异化的概念。数据来自真实适配器、真实 tokenizer 与真实 logits。
           </p>
         </div>
       </header>
@@ -811,7 +811,7 @@ export const ConceptLab: React.FC<ConceptLabProps> = ({ apiBase }) => {
 
       <div className="flex items-center gap-2 text-[10px] text-slate-600">
         <BookOpen className="w-3.5 h-3.5" />
-        <span>每个概念卡片的最后一行标注它在三种架构中的对应物；不改变现有 Transformer / RWKV / Mamba 页面。</span>
+        <span>每个概念卡片的最后一行标注它在三类架构、四个模型中的对应物；不改变现有 Transformer / RWKV / Mamba 页面。</span>
       </div>
     </main>
   );
