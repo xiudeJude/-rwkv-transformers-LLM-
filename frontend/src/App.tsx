@@ -49,6 +49,7 @@ const getWsUrl = (wsEndpoint: string) => {
 
 type StreamStatus = 'idle' | 'creating_session' | 'connecting' | 'streaming' | 'finished' | 'stopped' | 'error';
 type ModelArch = 'transformer' | 'rwkv' | 'mamba';
+type EngineStatus = 'unloaded' | 'loading' | 'ready' | 'busy' | 'error';
 
 export function App() {
   const [prompt, setPrompt] = useState('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
@@ -78,7 +79,14 @@ export function App() {
   const [singleLoading, setSingleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inspectData, setInspectData] = useState<SingleStepInspectResponse | null>(null);
-  const [modelMeta, setModelMeta] = useState<ModelMetadata | null>(null);
+  const [modelMetaByArch, setModelMetaByArch] = useState<Partial<Record<ModelArch, ModelMetadata>>>({});
+  const [engineStatusByArch, setEngineStatusByArch] = useState<Record<ModelArch, EngineStatus>>({
+    transformer: 'unloaded',
+    rwkv: 'unloaded',
+    mamba: 'unloaded',
+  });
+  const modelMeta = modelMetaByArch[modelArch] ?? null;
+  const engineStatus = engineStatusByArch[modelArch] ?? 'unloaded';
 
   // Streaming generation state
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle');
@@ -125,6 +133,52 @@ export function App() {
     modelArchRef.current = modelArch;
   }, [modelArch]);
 
+  const setArchStatus = (arch: ModelArch, status: EngineStatus) => {
+    setEngineStatusByArch((prev) => ({ ...prev, [arch]: status }));
+  };
+
+  const clearArchMeta = (arch: ModelArch) => {
+    setModelMetaByArch((prev) => {
+      const next = { ...prev };
+      delete next[arch];
+      return next;
+    });
+  };
+
+  const storeArchMeta = (arch: ModelArch, data: ModelMetadata, updateLayer = false) => {
+    setModelMetaByArch((prev) => ({ ...prev, [arch]: data }));
+    setArchStatus(arch, 'ready');
+    if (
+      updateLayer &&
+      arch === 'transformer' &&
+      modelArchRef.current === 'transformer' &&
+      data.full_attn_layers &&
+      data.full_attn_layers.length > 0
+    ) {
+      setCurrentLayer(data.full_attn_layers[0]);
+    }
+  };
+
+  const refreshModelMeta = async (arch: ModelArch) => {
+    setArchStatus(arch, 'loading');
+    try {
+      const res = await fetch(`${API_BASE}/api/model/info?model_type=${arch}`);
+      if (res.status === 409) {
+        clearArchMeta(arch);
+        setArchStatus(arch, 'busy');
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`模型信息读取失败 (${res.status})`);
+      }
+      const data: ModelMetadata = await res.json();
+      storeArchMeta(arch, data, true);
+    } catch {
+      clearArchMeta(arch);
+      setArchStatus(arch, 'error');
+    }
+  };
+
   // Helper to cleanly terminate and release an active session from GPU VRAM
   const closeActiveSession = (sessId: string | null, arch: ModelArch) => {
     if (wsRef.current) {
@@ -159,6 +213,12 @@ export function App() {
     closeActiveSession(activeSessionId, modelArch);
     setActiveSessionId(null);
     setIsStreaming(false);
+    setModelMetaByArch({});
+    setEngineStatusByArch({
+      transformer: 'unloaded',
+      rwkv: 'unloaded',
+      mamba: 'unloaded',
+    });
     setShowConceptLab(true);
   };
 
@@ -190,23 +250,8 @@ export function App() {
     },
   ];
 
-  // Fetch model metadata on initial load
+  // Model metadata is loaded lazily when a tab first runs generation or inspection.
   useEffect(() => {
-    fetch(`${API_BASE}/api/model/info`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`后端未就绪 (${res.status})`);
-        return res.json();
-      })
-      .then((data: ModelMetadata) => {
-        setModelMeta(data);
-        if (data.full_attn_layers && data.full_attn_layers.length > 0) {
-          setCurrentLayer(data.full_attn_layers[0]);
-        }
-      })
-      .catch((err) => {
-        console.warn('Backend not ready yet:', err.message);
-      });
-
     const handleBeforeUnload = () => {
       const sid = activeSessionIdRef.current;
       const arch = modelArchRef.current;
@@ -256,6 +301,11 @@ export function App() {
         }),
       });
 
+      if (res.status === 409) {
+        clearArchMeta(modelArch);
+        setArchStatus(modelArch, 'busy');
+        throw new Error('后端忙碌,稍后重试');
+      }
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
         throw new Error(errJson.detail || `请求失败 (${res.status})`);
@@ -273,7 +323,7 @@ export function App() {
         unified?.tokens && unified.tokens.length > 0 ? unified.tokens : data.attention.tokens
       );
       if (data.model_meta) {
-        setModelMeta(data.model_meta);
+        storeArchMeta(modelArch, data.model_meta);
       }
     } catch (err: any) {
       setError(err.message || '网络连接错误，请确认后端已启动');
@@ -309,39 +359,17 @@ export function App() {
 
     if (newArch === 'transformer') {
       setPrompt('注意力机制让大语言模型能够精确捕捉长距离语义依赖关系');
-      fetch(`${API_BASE}/api/model/info?model_type=transformer`)
-        .then((res) => res.json())
-        .then((data: ModelMetadata) => {
-          setModelMeta(data);
-          if (data.full_attn_layers && data.full_attn_layers.length > 0) {
-            setCurrentLayer(data.full_attn_layers[0]);
-          } else {
-            setCurrentLayer(3);
-          }
-          setCurrentHead(0);
-        })
-        .catch(console.warn);
+      setCurrentLayer(3);
+      setCurrentHead(0);
     } else if (newArch === 'rwkv') {
       setPrompt('RWKV通过线性状态递推摆脱了传统注意力机制的平方复杂度');
-      fetch(`${API_BASE}/api/model/info?model_type=rwkv`)
-        .then((res) => res.json())
-        .then((data: ModelMetadata) => {
-          setModelMeta(data);
-          setCurrentLayer(0);
-          setCurrentHead(0);
-        })
-        .catch(console.warn);
+      setCurrentLayer(0);
+      setCurrentHead(0);
     } else {
       setPrompt('Mamba uses selective state space models for efficient long-sequence modeling.');
       setMaxNewTokens((value) => Math.min(value, 128));
-      fetch(`${API_BASE}/api/model/info?model_type=mamba`)
-        .then((res) => res.json())
-        .then((data: ModelMetadata) => {
-          setModelMeta(data);
-          setCurrentLayer(0);
-          setCurrentHead(0);
-        })
-        .catch(console.warn);
+      setCurrentLayer(0);
+      setCurrentHead(0);
     }
   };
 
@@ -370,6 +398,7 @@ export function App() {
     setRwkvIncrementalRow(null);
     setMambaStates([]);
     setMambaState(null);
+    setArchStatus(modelArch, 'loading');
     setStreamStatus('creating_session');
 
     if (wsRef.current) {
@@ -398,14 +427,21 @@ export function App() {
         }),
       });
 
+      if (createRes.status === 409) {
+        clearArchMeta(modelArch);
+        setArchStatus(modelArch, 'busy');
+        throw new Error('后端忙碌,稍后重试');
+      }
       if (!createRes.ok) {
         const errJson = await createRes.json().catch(() => ({}));
+        setArchStatus(modelArch, 'error');
         throw new Error(errJson.detail || `会话创建失败 (${createRes.status})`);
       }
 
       const sessionData = await createRes.json();
       const sessionId = sessionData.session_id;
       setActiveSessionId(sessionId);
+      void refreshModelMeta(modelArch);
 
       // Initialize Visualization buffers with Prefill data.
       // Prefer the unified `state` envelope; fall back to legacy fields for compatibility.
@@ -865,6 +901,25 @@ export function App() {
   };
   const activeBadge = statusBadges[streamStatus];
 
+  const engineStatusLabel =
+    engineStatus === 'ready'
+      ? `已连接 · ${modelMeta?.device.toUpperCase() ?? 'CUDA'}`
+      : engineStatus === 'loading'
+        ? '加载中...'
+        : engineStatus === 'busy'
+          ? '后端忙碌,稍后重试'
+          : engineStatus === 'error'
+            ? '加载失败'
+            : '未加载';
+  const engineDotClass =
+    engineStatus === 'ready'
+      ? 'bg-emerald-400 animate-pulse'
+      : engineStatus === 'loading'
+        ? 'bg-sky-400 animate-pulse'
+        : engineStatus === 'busy' || engineStatus === 'error'
+          ? 'bg-rose-400'
+          : 'bg-amber-400';
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* Top Navbar */}
@@ -954,9 +1009,9 @@ export function App() {
           </div>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
-            <div className={`w-2 h-2 rounded-full ${modelMeta ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-            <span className="text-slate-300 font-mono text-[11px]">
-              {modelMeta ? `已连接 · ${modelMeta.device.toUpperCase()}` : '等待后端...'}
+            <div className={`w-2 h-2 rounded-full ${engineDotClass}`} />
+            <span className="text-slate-300 font-mono text-[11px] whitespace-nowrap">
+              {engineStatusLabel}
             </span>
           </div>
         </div>
