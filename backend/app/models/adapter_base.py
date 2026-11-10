@@ -6,27 +6,92 @@ import torch
 from ..core.schemas import InternalState, ModelMetadata
 
 
-def estimate_state_bytes(value: Any) -> int:
-    """估算张量/容器实际占用的字节数，供统一状态元信息使用。
+_CACHE_FIELD_NAMES = (
+    "key_cache",
+    "value_cache",
+    "keys",
+    "values",
+    "cache",
+    "layers",
+    "states",
+    "past_key_values",
+)
+_CACHE_METADATA_FIELDS = {
+    "config",
+    "generation_config",
+    "layer_class_to_replicate",
+    "dtype",
+    "device",
+}
+_MAX_CACHE_DEPTH = 8
 
-    只递归已知的安全容器和张量，遇到模型对象等复杂对象时返回 0，避免
-    在导出状态时误遍历整个计算图。
+
+def estimate_state_bytes(value: Any) -> int:
+    """估算张量/容器/缓存对象实际占用的字节数，供统一状态元信息使用。
+
+    除了张量和 list/tuple/dict，递归访问缓存对象的公开字段，以兼容不同
+    transformers 版本的缓存布局（例如 DynamicCache.layers[i].keys/values）。
+    对 nn.Module、类对象和元数据字段做剪枝，避免误遍历模型计算图。
     """
+    return _estimate_state_bytes(value, set(), 0)
+
+
+def _estimate_state_bytes(value: Any, seen: set, depth: int) -> int:
     if value is None:
         return 0
-    if isinstance(value, torch.Tensor):
-        return int(value.numel() * value.element_size())
-    if isinstance(value, (list, tuple)):
-        return sum(estimate_state_bytes(item) for item in value)
-    if isinstance(value, dict):
-        return sum(estimate_state_bytes(item) for item in value.values())
 
-    # HuggingFace DynamicCache 等缓存对象：只读取明确的 key/value 缓存字段
+    if isinstance(value, torch.Tensor):
+        oid = id(value)
+        if oid in seen:
+            return 0
+        seen.add(oid)
+        return int(value.numel() * value.element_size())
+
+    if isinstance(value, (str, bytes, int, float, bool)):
+        return 0
+
+    if depth >= _MAX_CACHE_DEPTH:
+        return 0
+
+    if isinstance(value, (list, tuple)):
+        oid = id(value)
+        if oid in seen:
+            return 0
+        seen.add(oid)
+        return sum(_estimate_state_bytes(item, seen, depth + 1) for item in value)
+
+    if isinstance(value, dict):
+        oid = id(value)
+        if oid in seen:
+            return 0
+        seen.add(oid)
+        return sum(_estimate_state_bytes(item, seen, depth + 1) for item in value.values())
+
+    if isinstance(value, type) or isinstance(value, torch.nn.Module):
+        return 0
+
+    oid = id(value)
+    if oid in seen:
+        return 0
+    seen.add(oid)
+
     total = 0
-    for attr in ("key_cache", "value_cache"):
-        cache = getattr(value, attr, None)
-        if isinstance(cache, (list, tuple)):
-            total += estimate_state_bytes(cache)
+    # 新版缓存（如 DynamicCache）通常把张量放在实例 __dict__ 的 layers 等字段中
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, dict):
+        for field, child in attributes.items():
+            if field.startswith("_") or field in _CACHE_METADATA_FIELDS:
+                continue
+            if isinstance(child, type) or callable(child):
+                continue
+            total += _estimate_state_bytes(child, seen, depth + 1)
+
+    # 兼容使用 __slots__ 或属性代理的缓存对象
+    for field in _CACHE_FIELD_NAMES:
+        if not hasattr(value, field):
+            continue
+        child = getattr(value, field)
+        total += _estimate_state_bytes(child, seen, depth + 1)
     return total
 
 

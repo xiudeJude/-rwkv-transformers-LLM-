@@ -116,8 +116,9 @@ O(L²) 注意力矩阵。Level 2 按需查询使用默认值 `True`。
 
 - Transformer：KV Cache、prefill 注意力历史、decode 注意力历史的字节数之和。
 - RWKV：当前导出层/头的 WKV 状态张量字节数（请求头时只算该头）。
-- 计算函数 `estimate_state_bytes()` 只递归张量、list/tuple/dict 和
-  `key_cache` / `value_cache` 字段，不会遍历模型计算图。
+- 计算函数 `estimate_state_bytes()` 递归张量、list/tuple/dict，并遍历缓存对象的
+  公开字段（兼容 `DynamicCache.layers[i].keys/values`、`key_cache`、`value_cache`
+  等不同版本布局）；遇到 `nn.Module`、类对象和配置元数据时剪枝，不会遍历模型计算图。
 
 ### 3.2 前端消费方式
 

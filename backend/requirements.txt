@@ -19,7 +19,7 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 
 # Transformer & GGUF model support
-transformers>=4.45.0
+transformers==5.17.0
 accelerate>=0.34.0
 sentencepiece>=0.2.0
 huggingface_hub>=0.24.0
