@@ -221,7 +221,6 @@ class RWKVAdapter(ModelAdapter):
         sampled_token = self.decode_token(next_token_id)
         state.tokens.append(sampled_token)
         state.token_ids.append(next_token_id)
-        state.step_count += 1
 
         # Check EOS token (0 is <|endoftext|> in RWKV)
         if next_token_id == 0:
@@ -250,6 +249,9 @@ class RWKVAdapter(ModelAdapter):
 
         delta = [round(c - p, 6) for c, p in zip(curr_summary, prev_summary)]
         state.history_summaries[target_layer].append(curr_summary)
+
+        # 先落盘状态/摘要历史，再更新 step_count；避免并发读取看到计数超前。
+        state.step_count += 1
 
         return {
             "step": state.step_count,

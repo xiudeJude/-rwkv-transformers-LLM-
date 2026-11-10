@@ -300,7 +300,6 @@ class TransformerAdapter(ModelAdapter):
         sampled_token = self.decode_token(next_token_id)
         state.tokens.append(sampled_token)
         state.token_ids.append(next_token_id)
-        state.step_count += 1
 
         # Check EOS token
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
@@ -323,8 +322,11 @@ class TransformerAdapter(ModelAdapter):
         state.last_logits = outputs.logits[:, -1, :].detach()
 
         # 4. Store step attentions for all full attention layers in CPU Float16
+        # 先落盘历史，再更新 step_count；避免并发 Level 2 读取看到“计数已增加、
+        # 但对应注意力历史尚不存在”的中间状态。
         step_attns_cpu = [attn[0].detach().cpu().to(torch.float16) for attn in outputs.attentions]
         state.step_attentions.append(step_attns_cpu)
+        state.step_count += 1
 
         # 5. Extract incremental attention slice for target layer and head
         full_layers = self.full_attn_layers
@@ -374,13 +376,11 @@ class TransformerAdapter(ModelAdapter):
 
         attn_layer_idx = full_layers.index(layer) if full_layers else min(layer, len(state.prefill_attentions) - 1)
 
-        # Determine target step. 并发 Level 2 读取可能发生在 step() 已增加
-        # step_count、但新一步注意力尚未写入 history 的窗口内，按已落盘历史截断。
+        # Determine target step
         if step is None or step > state.step_count:
             target_step = state.step_count
         else:
             target_step = max(0, step)
-        target_step = min(target_step, len(state.step_attentions))
 
         L_prompt = len(state.prefill_attentions[attn_layer_idx][head])
         L_total = L_prompt + target_step
@@ -466,7 +466,6 @@ class TransformerAdapter(ModelAdapter):
                 target_step = state.step_count
             else:
                 target_step = max(0, step)
-            target_step = min(target_step, len(state.step_attentions))
             L_prompt = len(state.prefill_attentions[attn_layer_idx][target_head])
             L_total = L_prompt + target_step
             if target_step == 0:
