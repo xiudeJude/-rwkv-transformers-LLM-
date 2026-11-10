@@ -213,7 +213,7 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
                   opacity="0.75"
                 />
               )}
-              {measured.some((item) => item.linear_state_bytes > 0) && (
+              {measured.some((item) => item.kv_bytes > 0 && item.linear_state_bytes > 0) && (
                 <path
                   d={line(measured.map((item) => item.kv_bytes), measured.map((item) => item.length))}
                   fill="none"
