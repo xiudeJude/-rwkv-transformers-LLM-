@@ -114,10 +114,11 @@ cd ..
 cp backend/.env.example backend/.env
 ```
 
-默认配置即读取 `backend/models/` 目录。若模型存放于自定义路径，直接在 `backend/.env` 中修改对应的绝对路径即可：
+默认配置即读取 `backend/models/` 目录。`.env` 中的相对路径以 `backend/` 目录为基准解析；若模型存放于自定义路径，可写相对路径或本机绝对路径：
 ```ini
-DEFAULT_TRANSFORMER=backend/models/Qwen3.5-0.8B-GGUF
-DEFAULT_RWKV=backend/models/rwkv7-g1d-0.4b-20260210-ctx8192.pth
+# 相对于 backend/ 目录
+DEFAULT_TRANSFORMER=models/Qwen3.5-0.8B-GGUF
+DEFAULT_RWKV=models/rwkv7-g1d-0.4b-20260210-ctx8192.pth
 DEVICE=cuda
 HF_ENDPOINT=https://hf-mirror.com
 ```
