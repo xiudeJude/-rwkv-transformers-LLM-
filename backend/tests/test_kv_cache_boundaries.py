@@ -10,7 +10,7 @@ from app.models.transformer import TransformerEngine
 from app.models.session import session_manager
 from app.core.config import settings
 
-def run_boundary_tests():
+def test_kv_cache_boundaries():
     print("=" * 70)
     print("【KV Cache 增量推理核心边界条件专项测试】")
     print(f"Device: {settings.DEVICE}")
@@ -111,4 +111,4 @@ def run_boundary_tests():
     print("=" * 70)
 
 if __name__ == "__main__":
-    run_boundary_tests()
+    test_kv_cache_boundaries()

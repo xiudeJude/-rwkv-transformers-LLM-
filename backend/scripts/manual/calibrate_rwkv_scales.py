@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 os.environ["RWKV_V7_ON"] = "1"
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from app.models.rwkv_engine import RWKVEngine
 from app.models.rwkv_session import RWKVSession

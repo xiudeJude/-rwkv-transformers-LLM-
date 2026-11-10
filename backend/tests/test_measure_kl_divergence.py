@@ -7,7 +7,7 @@ backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-from tests.measure_kl_divergence import (
+from scripts.manual.measure_kl_divergence import (
     compute_logits_kl_divergence,
     compute_attention_kl_divergence,
     run_benchmark,
@@ -68,7 +68,7 @@ def test_measure_script_cli():
     env["PYTHONIOENCODING"] = "utf-8"
     cmd = [
         sys.executable,
-        os.path.join(backend_dir, "tests", "measure_kl_divergence.py"),
+        os.path.join(backend_dir, "scripts", "manual", "measure_kl_divergence.py"),
         "--device", "cpu"
     ]
     proc = subprocess.run(

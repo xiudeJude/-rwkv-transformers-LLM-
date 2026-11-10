@@ -263,7 +263,7 @@ curl -s "http://127.0.0.1:8000/api/model/info?model_type=rwkv"
    huggingface-cli download Qwen/Qwen3.5-0.8B --local-dir backend/models/Qwen3.5-0.8B
 
    # 步骤 2: 运行逐层 Attention 矩阵与 Logits 的 KL 散度测量脚本
-   python backend/tests/measure_kl_divergence.py --unquantized-path backend/models/Qwen3.5-0.8B --device cuda
+   python backend/scripts/manual/measure_kl_divergence.py --unquantized-path backend/models/Qwen3.5-0.8B --device cuda
    ```
 
 ### 模型架构规格（实测）

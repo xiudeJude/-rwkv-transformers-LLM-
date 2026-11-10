@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from main import app
 from app.models.session import session_manager
 
-def run_suite():
+def test_websocket_verification_suite():
     print("=" * 80)
     print("  P0-Step3: WebSocket 流式推流与 rAF 渲染队列三项边界验证")
     print("=" * 80)
@@ -71,10 +71,15 @@ def run_suite():
             tok = msg.get("token", "")
             is_fin = msg.get("is_finished", False)
 
-            # Strict Level 1 check: NO heavy matrices
+            # Strict Level 1 check: the Transformer route intentionally sends the
+            # lightweight attention_row (and unified state.row), but must never
+            # send a full matrix.
             assert "matrix" not in msg, "CRITICAL: Level 1 message leaked matrix!"
             assert "full_matrix" not in msg, "CRITICAL: Level 1 message leaked full_matrix!"
-            assert "attention_row" not in msg, "CRITICAL: Level 1 message leaked attention_row!"
+            assert "attention_row" in msg, "CRITICAL: Transformer Level 1 lost attention_row!"
+            assert msg.get("state", {}).get("matrix") is None, (
+                "CRITICAL: unified state leaked a matrix at Level 1!"
+            )
 
             tokens_text.append(tok)
             simulated_queue.append((step, tok, now_ms))
@@ -226,4 +231,4 @@ def run_suite():
 
 
 if __name__ == "__main__":
-    run_suite()
+    test_websocket_verification_suite()
