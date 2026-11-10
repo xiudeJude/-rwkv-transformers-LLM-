@@ -11,17 +11,28 @@ interface ConceptLabProps {
   apiBase: string;
 }
 
-interface MemorySample {
-  step: number;
-  seq_len: number;
+interface MemoryMeasurement {
+  length: number;
+  actual_tokens: number;
+  measured: boolean;
   cache_bytes: number;
-  viz_history_bytes: number;
-  state_bytes: number;
+  kv_bytes: number;
+  linear_state_bytes: number;
+  kv_element_bytes?: number;
+  dtype_label: string;
+  full_attn_layers: number[];
+  linear_layers: number[];
+  note?: string;
 }
 
 interface TheoreticalCurve {
   available: boolean;
   values: number[];
+  lengths?: number[];
+  actual_kv_bytes?: number[];
+  diff_bytes?: number[];
+  max_abs_diff_bytes?: number;
+  matches?: boolean;
   formula?: string;
   reason?: string;
   params?: {
@@ -34,18 +45,20 @@ interface TheoreticalCurve {
 }
 
 interface GrowModel {
-  model_type: 'transformer' | 'rwkv' | 'mamba';
+  model_type: 'transformer' | 'attention_baseline' | 'rwkv' | 'mamba';
+  display_name: string;
+  is_base_model: boolean;
   model_id: string;
   available: boolean;
   error?: string;
-  samples: MemorySample[];
+  measurements: MemoryMeasurement[];
   cache_series_note?: string;
   theoretical?: TheoreticalCurve;
 }
 
 interface GrowthResponse {
   prompt: string;
-  max_tokens: number;
+  requested_lengths: number[];
   models: GrowModel[];
 }
 
@@ -90,6 +103,7 @@ const formatBytes = (bytes: number): string => {
 
 const MODEL_COLORS: Record<string, string> = {
   transformer: '#818cf8',
+  attention_baseline: '#f59e0b',
   rwkv: '#34d399',
   mamba: '#22d3ee',
 };
@@ -119,85 +133,129 @@ const ConceptCard: React.FC<{
   </section>
 );
 
-const MemoryChart: React.FC<{ models: GrowModel[] }> = ({ models }) => {
-  const available = models.filter((model) => model.available && model.samples.length > 0);
+const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ models, logScale }) => {
+  const available = models.filter((model) => model.available && model.measurements.length > 0);
   if (available.length === 0) {
     return <div className="h-56 rounded-lg border border-dashed border-slate-800 flex items-center justify-center text-xs text-slate-500">暂无可用曲线</div>;
   }
 
-  const width = 780;
-  const height = 300;
-  const padLeft = 66;
+  const width = 820;
+  const height = 330;
+  const padLeft = 72;
   const padRight = 18;
   const padTop = 24;
-  const padBottom = 40;
-  const maxStep = Math.max(...available.map((model) => Math.max(...model.samples.map((sample) => sample.step))), 1);
+  const padBottom = 44;
+  const allLengths = Array.from(new Set(available.flatMap((model) => model.measurements.map((item) => item.length)))).sort((a, b) => a - b);
+  const maxLength = Math.max(...allLengths, 1);
   const allValues = available.flatMap((model) => [
-    ...model.samples.map((sample) => sample.cache_bytes),
+    ...model.measurements.map((item) => item.cache_bytes),
     ...(model.theoretical?.available ? model.theoretical.values : []),
   ]);
   const maxValue = Math.max(...allValues, 1);
+  const logMax = Math.max(Math.log10(Math.max(maxValue, 1)), 1e-9);
 
-  const x = (step: number) => padLeft + (step / maxStep) * (width - padLeft - padRight);
-  const y = (value: number) => height - padBottom - (value / maxValue) * (height - padTop - padBottom);
-  const line = (values: number[], steps: number[]) =>
-    values.map((value, index) => `${index === 0 ? 'M' : 'L'} ${x(steps[index])} ${y(value)}`).join(' ');
+  const x = (length: number) => padLeft + (length / maxLength) * (width - padLeft - padRight);
+  const yScale = (value: number) => (logScale ? Math.log10(Math.max(value, 1)) : value);
+  const yMax = logScale ? logMax : maxValue;
+  const y = (value: number) => height - padBottom - (yScale(value) / yMax) * (height - padTop - padBottom);
+  const line = (values: number[], lengths: number[]) =>
+    values.map((value, index) => `${index === 0 ? 'M' : 'L'} ${x(lengths[index])} ${y(value)}`).join(' ');
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const value = logScale ? 10 ** (logMax * (1 - ratio)) : maxValue * (1 - ratio);
+    return value;
+  });
 
   return (
     <div className="space-y-2">
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto rounded-lg bg-slate-950/80 border border-slate-800">
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-          const value = maxValue * (1 - ratio);
-          return (
-            <g key={ratio}>
-              <line x1={padLeft} x2={width - padRight} y1={y(value)} y2={y(value)} stroke="#1e293b" strokeWidth="1" />
-              <text x={padLeft - 8} y={y(value) + 3} textAnchor="end" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
-                {formatBytes(value)}
-              </text>
-            </g>
-          );
-        })}
+        {yTicks.map((value, index) => (
+          <g key={index}>
+            <line x1={padLeft} x2={width - padRight} y1={y(value)} y2={y(value)} stroke="#1e293b" strokeWidth="1" />
+            <text x={padLeft - 8} y={y(value) + 3} textAnchor="end" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
+              {formatBytes(Math.round(value))}
+            </text>
+          </g>
+        ))}
         <line x1={padLeft} x2={width - padRight} y1={height - padBottom} y2={height - padBottom} stroke="#475569" />
-        {[0, Math.floor(maxStep / 2), maxStep].map((step) => (
-          <text key={step} x={x(step)} y={height - padBottom + 16} textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
-            {step}
+        {allLengths.map((length) => (
+          <text key={length} x={x(length)} y={height - padBottom + 16} textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
+            {length}
           </text>
         ))}
         {available.map((model) => {
-          const steps = model.samples.map((sample) => sample.step);
-          const values = model.samples.map((sample) => sample.cache_bytes);
+          const measured = model.measurements.filter((item) => item.measured);
+          const projected = model.measurements.filter((item) => !item.measured);
+          const color = MODEL_COLORS[model.model_type];
           return (
             <g key={model.model_type}>
-              <path d={line(values, steps)} fill="none" stroke={MODEL_COLORS[model.model_type]} strokeWidth="2.5" />
-              {model.samples.map((sample, index) => (
-                <circle key={index} cx={x(sample.step)} cy={y(sample.cache_bytes)} r="2.5" fill={MODEL_COLORS[model.model_type]} />
-              ))}
-              {model.theoretical?.available && model.theoretical.values.length === steps.length && (
+              {measured.length >= 2 && (
                 <path
-                  d={line(model.theoretical.values, steps)}
+                  d={line(measured.map((item) => item.cache_bytes), measured.map((item) => item.length))}
                   fill="none"
-                  stroke={MODEL_COLORS[model.model_type]}
-                  strokeWidth="1.5"
-                  strokeDasharray="5 4"
+                  stroke={color}
+                  strokeWidth="2.5"
+                />
+              )}
+              {measured.map((item) => (
+                <circle key={`m-${item.length}`} cx={x(item.length)} cy={y(item.cache_bytes)} r="2.5" fill={color} />
+              ))}
+              {projected.length > 0 && (
+                <path
+                  d={line(
+                    [measured[measured.length - 1], ...projected].map((item) => item.cache_bytes),
+                    [measured[measured.length - 1], ...projected].map((item) => item.length)
+                  )}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="1.8"
+                  strokeDasharray="5 5"
                   opacity="0.75"
+                />
+              )}
+              {measured.some((item) => item.linear_state_bytes > 0) && (
+                <path
+                  d={line(measured.map((item) => item.kv_bytes), measured.map((item) => item.length))}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="1.2"
+                  opacity="0.95"
+                />
+              )}
+              {model.theoretical?.available && model.theoretical.values.length > 0 && (
+                <path
+                  d={line(model.theoretical.values, model.theoretical.lengths ?? measured.map((item) => item.length))}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="1.4"
+                  strokeDasharray="2 3"
+                  opacity="0.65"
                 />
               )}
             </g>
           );
         })}
-        <text x={width / 2} y={height - 6} textAnchor="middle" fill="#64748b" fontSize="10">decode step</text>
+        <text x={width / 2} y={height - 6} textAnchor="middle" fill="#64748b" fontSize="10">prefill length (tokens)</text>
         <text x={12} y={padTop} fill="#64748b" fontSize="10" transform={`rotate(-90 12 ${padTop})`}>cache_bytes</text>
       </svg>
       <div className="flex items-center gap-4 flex-wrap text-[10px] text-slate-400 font-mono">
         {available.map((model) => (
           <span key={model.model_type} className="flex items-center gap-1.5">
             <span className="w-4 h-0.5 rounded" style={{ backgroundColor: MODEL_COLORS[model.model_type] }} />
-            {model.model_type}
+            {model.display_name} · {model.measurements[0]?.dtype_label || 'dtype'}
           </span>
         ))}
         <span className="flex items-center gap-1.5 text-slate-500">
+          <span className="w-4 h-0.5 bg-slate-400" />
+          实际 kv_bytes（混合架构细线）
+        </span>
+        <span className="flex items-center gap-1.5 text-slate-500">
           <span className="w-4 h-0.5 border-t border-dashed border-slate-400" />
-          理论 KV（虚线）
+          理论 KV
+        </span>
+        <span className="flex items-center gap-1.5 text-slate-500">
+          <span className="w-4 h-0.5 border-t border-dashed border-slate-500" />
+          结构恒定（未实测）
         </span>
       </div>
     </div>
@@ -206,7 +264,8 @@ const MemoryChart: React.FC<{ models: GrowModel[] }> = ({ models }) => {
 
 const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
   const [prompt, setPrompt] = useState('The capital of France is');
-  const [maxTokens, setMaxTokens] = useState(8);
+  const [lengthsText, setLengthsText] = useState('64,128,256,512');
+  const [logScale, setLogScale] = useState(false);
   const [data, setData] = useState<GrowthResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,10 +274,14 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
     setLoading(true);
     setError(null);
     try {
+      const lengths = lengthsText
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isFinite(value) && value > 0);
       const response = await fetch(`${apiBase}/api/concept/memory-growth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, max_tokens: maxTokens }),
+        body: JSON.stringify({ prompt, lengths }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -236,8 +299,8 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
     <ConceptCard
       index="A"
       title="状态与内存增长对比"
-      explanation="同一段英文 prompt 下，模型每生成一个 token 必须保留多少推理缓存？三个模型会逐个加载、测量、卸载，避免同时占用显存。"
-      mapping="Transformer：KV Cache（混合层还含线性递归状态）；RWKV：WKV 递归状态；Mamba：conv_state + ssm_state。"
+      explanation="对同一段英文文本，在多个 prefill 长度下各测一次推理缓存；注意力模型额外测量 1024/2048，递归模型超过 512 的部分用“结构恒定（未实测）”虚线表示。模型逐个加载、测完卸载。"
+      mapping="Qwen3.5-0.8B：KV Cache + 线性层递归状态；Qwen2.5-0.5B：纯 KV Cache；RWKV：WKV 递归状态；Mamba：conv_state + ssm_state。"
     >
       <div className="space-y-3">
         <div className="flex gap-2 flex-wrap items-center">
@@ -245,21 +308,17 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             disabled={loading}
-            className="flex-1 min-w-[260px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
+            className="flex-1 min-w-[240px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
             placeholder="English prompt"
           />
           <label className="flex items-center gap-2 text-[11px] text-slate-400">
-            生成上限
+            prefill 长度
             <input
-              type="range"
-              min={1}
-              max={32}
-              value={maxTokens}
-              onChange={(event) => setMaxTokens(Number(event.target.value))}
+              value={lengthsText}
+              onChange={(event) => setLengthsText(event.target.value)}
               disabled={loading}
-              className="w-28 accent-indigo-500"
+              className="w-36 bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
             />
-            <span className="font-mono text-indigo-300">{maxTokens}</span>
           </label>
           <button
             type="button"
@@ -271,31 +330,66 @@ const ConceptA: React.FC<{ apiBase: string }> = ({ apiBase }) => {
             {loading ? '逐个加载模型中...' : '运行对比'}
           </button>
         </div>
+        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+          <span>默认 64/128/256/512；注意力模型自动加 1024/2048。</span>
+          <span className="ml-auto flex items-center gap-1">
+            坐标：
+            <button type="button" onClick={() => setLogScale(false)} className={`px-2 py-0.5 rounded border ${!logScale ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40' : 'border-slate-700 text-slate-400'}`}>线性</button>
+            <button type="button" onClick={() => setLogScale(true)} className={`px-2 py-0.5 rounded border ${logScale ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40' : 'border-slate-700 text-slate-400'}`}>对数</button>
+          </span>
+        </div>
         {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2">{error}</div>}
         {data && (
           <div className="space-y-3">
-            <MemoryChart models={data.models} />
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              {data.models.map((model) => (
-                <div key={model.model_type} className="rounded-lg border border-slate-800 bg-slate-950/70 p-3 text-[11px] text-slate-400">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-slate-200">{model.model_type}</span>
-                    {!model.available && <span className="text-rose-300">不可用</span>}
+            <MemoryChart models={data.models} logScale={logScale} />
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
+              {data.models.map((model) => {
+                const first = model.measurements[0];
+                const fullLayers = first?.full_attn_layers ?? [];
+                const linearLayers = first?.linear_layers ?? [];
+                return (
+                  <div key={model.model_type} className="rounded-lg border border-slate-800 bg-slate-950/70 p-3 text-[11px] text-slate-400">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-semibold text-slate-200">{model.display_name}</span>
+                      {!model.available && <span className="text-rose-300">不可用</span>}
+                    </div>
+                    {model.is_base_model && <div className="text-[9px] text-amber-300/90 mt-0.5">基座模型，不是对话模型</div>}
+                    {model.available ? (
+                      <>
+                        <p className="mt-1 leading-relaxed">{model.cache_series_note}</p>
+                        <p className="mt-1 text-slate-500 font-mono">dtype: {first?.dtype_label || '—'}</p>
+                        {first && (
+                          <p className="mt-1 text-slate-500 font-mono leading-relaxed">
+                            L={first.length}: cache {formatBytes(first.cache_bytes)} · kv {formatBytes(first.kv_bytes)} · linear {formatBytes(first.linear_state_bytes)}
+                          </p>
+                        )}
+                        {model.model_type === 'transformer' || model.model_type === 'attention_baseline' ? (
+                          <p className="mt-1 text-slate-500 leading-relaxed">
+                            KV 层 [{fullLayers.join(', ')}] · 线性层 [{linearLayers.join(', ')}]
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-slate-500">无 KV Cache；递归状态</p>
+                        )}
+                        {model.theoretical?.available ? (
+                          <p className={`mt-1 leading-relaxed ${model.theoretical.matches ? 'text-emerald-300/80' : 'text-rose-300/80'}`}>
+                            {model.theoretical.matches
+                              ? '实际 kv_bytes 与理论 KV 逐点相等（最大偏差 0 B）'
+                              : `实际 kv_bytes 与理论 KV 不一致，最大偏差 ${model.theoretical.max_abs_diff_bytes ?? '?'} B`}
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-slate-500">{model.theoretical?.reason}</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="mt-1 text-rose-300/80">{model.error}</p>
+                    )}
                   </div>
-                  {model.available ? (
-                    <>
-                      <p className="mt-1 leading-relaxed">{model.cache_series_note}</p>
-                      <p className="mt-1 text-slate-500">{model.theoretical?.available ? '包含理论 KV 虚线' : model.theoretical?.reason}</p>
-                    </>
-                  ) : (
-                    <p className="mt-1 text-rose-300/80">{model.error}</p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div className="text-[10px] text-slate-500 leading-relaxed">
-              虚线为理论 KV Cache：2 × KV层数 × KV头数 × 头维度 × 序列长度 × 每元素字节数，参数从模型 config 读取；RWKV/Mamba 没有 KV Cache，不绘制理论线。
-              理论值只计算 KV；Qwen 混合架构的线性层递归状态和实际缓存布局以实测为准。
+              理论 KV = 2 × KV层数 × KV头数 × 头维度 × 序列长度 × 每元素字节数，参数从模型 config 读取。Qwen3.5 只对 full_attention 层做理论比较，线性层递归状态单独计入 linear_state_bytes。
+              RWKV/Mamba 超过 512 的点为“结构恒定（未实测）”，不是测量值。
             </div>
           </div>
         )}
@@ -426,7 +520,7 @@ const ConceptB: React.FC<{ apiBase: string }> = ({ apiBase }) => {
 };
 
 const ConceptC: React.FC<{ apiBase: string }> = ({ apiBase }) => {
-  const [modelType, setModelType] = useState<'transformer' | 'rwkv' | 'mamba'>('mamba');
+  const [modelType, setModelType] = useState<'transformer' | 'attention_baseline' | 'rwkv' | 'mamba'>('mamba');
   const [prompt, setPrompt] = useState('The capital of France is');
   const [data, setData] = useState<SampleLogitsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -483,11 +577,12 @@ const ConceptC: React.FC<{ apiBase: string }> = ({ apiBase }) => {
         <div className="flex gap-2 flex-wrap items-center">
           <select
             value={modelType}
-            onChange={(event) => setModelType(event.target.value as 'transformer' | 'rwkv' | 'mamba')}
+            onChange={(event) => setModelType(event.target.value as 'transformer' | 'attention_baseline' | 'rwkv' | 'mamba')}
             disabled={loading}
             className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
           >
-            <option value="transformer">Transformer</option>
+            <option value="transformer">Transformer（Qwen3.5 混合）</option>
+            <option value="attention_baseline">Transformer（Qwen2.5 纯注意力）</option>
             <option value="rwkv">RWKV</option>
             <option value="mamba">Mamba</option>
           </select>

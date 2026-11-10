@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -9,8 +10,11 @@ router = APIRouter(prefix="/api/concept", tags=["concept-lab"])
 
 
 class MemoryGrowthRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, description="Three architectures share this prompt")
-    max_tokens: int = Field(12, ge=1, le=concept_lab.MAX_MEMORY_TOKENS)
+    prompt: str = Field(..., min_length=1, description="Four architectures share this prompt")
+    lengths: Optional[list[int]] = Field(
+        None,
+        description="prefill lengths; default 64/128/256/512, attention models also get 1024/2048",
+    )
 
 
 class TokenizeRequest(BaseModel):
@@ -19,7 +23,9 @@ class TokenizeRequest(BaseModel):
 
 class SampleRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=4096)
-    model_type: str = Field(..., pattern="^(transformer|rwkv|mamba)$")
+    model_type: str = Field(
+        ..., pattern="^(transformer|attention_baseline|rwkv|mamba)$"
+    )
 
 
 @router.post("/memory-growth")
@@ -29,7 +35,7 @@ async def memory_growth(req: MemoryGrowthRequest):
 
         release_global_engines()
         return await asyncio.to_thread(
-            concept_lab.run_memory_growth, req.prompt, req.max_tokens
+            concept_lab.run_memory_growth, req.prompt, req.lengths
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

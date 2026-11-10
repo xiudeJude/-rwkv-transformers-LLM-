@@ -1,8 +1,8 @@
 """Backend data sources for the concept lab.
 
 The lab deliberately loads one model at a time and unloads it before the next
-experiment. This keeps the 8GB GPU usable while demonstrating three different
-state/memory shapes.
+experiment. This keeps the 8GB GPU usable while demonstrating different state
+and memory shapes.
 """
 
 import gc
@@ -13,23 +13,40 @@ import torch
 from transformers import AutoTokenizer
 
 from ..core.config import settings
+from ..models.attention_baseline import PureAttentionAdapter
 from ..models.mamba_engine import MambaAdapter
 from ..models.rwkv_engine import RWKVAdapter
 from ..models.transformer import TransformerAdapter
 
-MODEL_TYPES = ("transformer", "rwkv", "mamba")
-MAX_MEMORY_TOKENS = 32
+MEMORY_MODEL_TYPES = ("transformer", "attention_baseline", "rwkv", "mamba")
+TOKENIZER_MODEL_TYPES = ("transformer", "rwkv", "mamba")
+SAMPLE_MODEL_TYPES = ("transformer", "attention_baseline", "rwkv", "mamba")
+
+DEFAULT_MEASURE_LENGTHS = (64, 128, 256, 512)
+ATTENTION_EXTRA_LENGTHS = (1024, 2048)
+MAX_MEASURE_LENGTH = 2048
 _MODEL_LOCK = threading.Lock()
 
 
 def _model_spec(model_type: str):
     if model_type == "transformer":
         return TransformerAdapter, settings.DEFAULT_TRANSFORMER
+    if model_type == "attention_baseline":
+        return PureAttentionAdapter, settings.DEFAULT_ATTENTION_BASELINE
     if model_type == "rwkv":
         return RWKVAdapter, settings.DEFAULT_RWKV
     if model_type == "mamba":
         return MambaAdapter, settings.DEFAULT_MAMBA
     raise ValueError(f"Unknown model type: {model_type}")
+
+
+def _display_name(model_type: str) -> str:
+    return {
+        "transformer": "Qwen3.5-0.8B 混合架构",
+        "attention_baseline": "Qwen2.5-0.5B 纯注意力（基座）",
+        "rwkv": "RWKV-7 Goose 0.4B",
+        "mamba": "Mamba-130M（基座）",
+    }[model_type]
 
 
 def _format_bytes(value: int) -> str:
@@ -61,7 +78,7 @@ def _describe_series(values: List[int]) -> str:
     )
 
 
-def _theoretical_kv(adapter, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _theoretical_kv(adapter, measurements: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(adapter, TransformerAdapter):
         return {
             "available": False,
@@ -96,18 +113,47 @@ def _theoretical_kv(adapter, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
             "values": [],
         }
 
-    try:
-        element_bytes = int(next(adapter.model.parameters()).element_size())
-    except StopIteration:
-        element_bytes = 2
+    measured = [item for item in measurements if item.get("measured", True)]
+    # 以实际 KV 张量的 element_size 为准，避免权重与缓存 dtype 不同时把
+    # 理论曲线算错；取不到时退回模型参数 dtype。
+    element_bytes = next(
+        (
+            int(item["kv_element_bytes"])
+            for item in measured
+            if item.get("kv_element_bytes")
+        ),
+        0,
+    )
+    if element_bytes == 0:
+        try:
+            element_bytes = int(next(adapter.model.parameters()).element_size())
+        except StopIteration:
+            element_bytes = 2
 
     values = [
-        int(2 * kv_layers * kv_heads * head_dim * sample["seq_len"] * element_bytes)
-        for sample in samples
+        int(2 * kv_layers * kv_heads * head_dim * item["length"] * element_bytes)
+        for item in measured
     ]
+    actual_kv = [int(item.get("kv_bytes", 0)) for item in measured]
+    diffs = [actual - expected for actual, expected in zip(actual_kv, values)]
+    max_abs_diff = max((abs(diff) for diff in diffs), default=0)
+    matches = all(diff == 0 for diff in diffs)
+    is_hybrid = len(getattr(adapter, "full_attn_layers", [])) != int(num_layers or 0)
+    if is_hybrid:
+        reason = (
+            "理论曲线只计算 KV Cache；实际 cache_bytes 另含线性层递归状态，"
+            "因此与理论逐点比较的是 kv_bytes。"
+        )
+    else:
+        reason = "纯注意力模型：实际 kv_bytes 应逐点等于理论 KV。"
     return {
         "available": True,
         "values": values,
+        "lengths": [int(item["length"]) for item in measured],
+        "actual_kv_bytes": actual_kv,
+        "diff_bytes": diffs,
+        "max_abs_diff_bytes": max_abs_diff,
+        "matches": matches,
         "formula": "2 × KV层数 × KV头数 × 头维度 × 序列长度 × 每元素字节数",
         "params": {
             "kv_layers": int(kv_layers),
@@ -116,61 +162,105 @@ def _theoretical_kv(adapter, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
             "element_bytes": element_bytes,
             "layer_source": layer_source,
         },
-        "reason": "理论曲线只计算 KV Cache；混合架构的线性层递归状态不在该公式内。",
+        "reason": reason,
     }
 
 
-def _collect_growth(model_type: str, prompt: str, max_tokens: int) -> Dict[str, Any]:
+def _source_ids(adapter, prompt: str, target_length: int) -> List[int]:
+    ids = list(adapter.tokenize(prompt)["token_ids"])
+    if not ids:
+        ids = [0]
+    while len(ids) < target_length:
+        ids.extend(ids[:target_length - len(ids)])
+    return ids[:target_length]
+
+
+def _collect_growth(model_type: str, prompt: str, requested_lengths: List[int]) -> Dict[str, Any]:
     adapter_cls, model_id = _model_spec(model_type)
     adapter = adapter_cls()
     try:
         adapter.load_model(model_id, device=settings.DEVICE)
-        state = adapter.create_state()
-        prefill = adapter.prefill(state, prompt, target_layer=0)
+        is_attention = isinstance(adapter, TransformerAdapter)
+        measure_lengths = sorted(set(
+            length for length in requested_lengths
+            if is_attention or length <= max(DEFAULT_MEASURE_LENGTHS)
+        ))
+        if is_attention:
+            measure_lengths = sorted(set(measure_lengths + list(ATTENTION_EXTRA_LENGTHS)))
+        projection_lengths = [] if is_attention else sorted(set(
+            length for length in requested_lengths
+            if length > max(DEFAULT_MEASURE_LENGTHS)
+        ))
 
-        samples: List[Dict[str, Any]] = []
-
-        def record(step: int) -> None:
-            exported = adapter.export_state(
-                state, step=step, layer=0, include_matrix=False
+        measurements: List[Dict[str, Any]] = []
+        last_metrics: Optional[Dict[str, Any]] = None
+        for length in measure_lengths:
+            state = adapter.create_state()
+            ids = _source_ids(adapter, prompt, length)
+            prefill_kwargs = {"prompt_token_ids": ids}
+            if is_attention:
+                prefill_kwargs["capture_attention"] = False
+            prefill = adapter.prefill(
+                state,
+                prompt,
+                target_layer=0,
+                **prefill_kwargs,
             )
-            samples.append({
-                "step": exported.step,
-                "seq_len": exported.seq_len,
-                "cache_bytes": int(exported.cache_bytes),
-                "viz_history_bytes": int(exported.viz_history_bytes),
-                "state_bytes": int(exported.state_bytes),
+            metrics = adapter.cache_metrics(state)
+            last_metrics = metrics
+            measurements.append({
+                "length": int(length),
+                "actual_tokens": int(prefill["seq_len"]),
+                "measured": True,
+                "cache_bytes": int(metrics["cache_bytes"]),
+                "kv_bytes": int(metrics.get("kv_bytes", 0)),
+                "linear_state_bytes": int(metrics.get("linear_state_bytes", 0)),
+                "kv_element_bytes": int(metrics.get("kv_element_bytes", 0)),
+                "dtype_label": metrics.get("dtype_label", ""),
+                "full_attn_layers": metrics.get("full_attn_layers", []),
+                "linear_layers": metrics.get("linear_layers", []),
+            })
+            adapter.close_state(state)
+
+        for length in projection_lengths:
+            if last_metrics is None:
+                break
+            measurements.append({
+                "length": int(length),
+                "actual_tokens": int(length),
+                "measured": False,
+                "cache_bytes": int(last_metrics["cache_bytes"]),
+                "kv_bytes": int(last_metrics.get("kv_bytes", 0)),
+                "linear_state_bytes": int(last_metrics.get("linear_state_bytes", 0)),
+                "kv_element_bytes": int(last_metrics.get("kv_element_bytes", 0)),
+                "dtype_label": last_metrics.get("dtype_label", ""),
+                "full_attn_layers": last_metrics.get("full_attn_layers", []),
+                "linear_layers": last_metrics.get("linear_layers", []),
+                "note": "结构上恒定，未实测",
             })
 
-        record(0)
-        for _ in range(max_tokens):
-            result = adapter.step(
-                state,
-                temperature=0.0,
-                top_k=1,
-                repetition_penalty=1.0,
-                target_layer=0,
-            )
-            record(int(result["step"]))
-            if result["is_finished"]:
-                break
-
+        measured_values = [
+            item["cache_bytes"] for item in measurements if item.get("measured")
+        ]
         return {
             "model_type": model_type,
+            "display_name": _display_name(model_type),
             "model_id": model_id,
             "available": True,
-            "prompt_tokens": len(prefill["token_ids"]),
-            "samples": samples,
-            "cache_series_note": _describe_series([item["cache_bytes"] for item in samples]),
-            "theoretical": _theoretical_kv(adapter, samples),
+            "is_base_model": model_type in {"attention_baseline", "mamba"},
+            "measurements": measurements,
+            "cache_series_note": _describe_series(measured_values),
+            "theoretical": _theoretical_kv(adapter, measurements),
         }
     except Exception as exc:
         return {
             "model_type": model_type,
+            "display_name": _display_name(model_type),
             "model_id": model_id,
             "available": False,
+            "is_base_model": model_type in {"attention_baseline", "mamba"},
             "error": str(exc),
-            "samples": [],
+            "measurements": [],
             "theoretical": {"available": False, "reason": "模型未成功加载。", "values": []},
         }
     finally:
@@ -182,20 +272,27 @@ def _collect_growth(model_type: str, prompt: str, max_tokens: int) -> Dict[str, 
                 torch.cuda.empty_cache()
 
 
-def run_memory_growth(prompt: str, max_tokens: int) -> Dict[str, Any]:
+def run_memory_growth(prompt: str, lengths: Optional[List[int]] = None) -> Dict[str, Any]:
     if not prompt.strip():
         raise ValueError("prompt 不能为空。")
-    if max_tokens < 1 or max_tokens > MAX_MEMORY_TOKENS:
-        raise ValueError(f"max_tokens 必须在 1 ~ {MAX_MEMORY_TOKENS} 之间。")
+    # 64/128/256/512 是四个模型的共同测量基线；注意力模型再自动补
+    # 1024/2048。自定义 lengths 只做增补，不会把基线长度删掉。
+    requested = sorted(set(
+        list(lengths or [])
+        + list(DEFAULT_MEASURE_LENGTHS)
+        + list(ATTENTION_EXTRA_LENGTHS)
+    ))
+    if any(length < 1 or length > MAX_MEASURE_LENGTH for length in requested):
+        raise ValueError(f"lengths 必须在 1 ~ {MAX_MEASURE_LENGTH} 之间。")
 
     with _MODEL_LOCK:
         models = [
-            _collect_growth(model_type, prompt, max_tokens)
-            for model_type in MODEL_TYPES
+            _collect_growth(model_type, prompt, requested)
+            for model_type in MEMORY_MODEL_TYPES
         ]
     return {
         "prompt": prompt,
-        "max_tokens": max_tokens,
+        "requested_lengths": sorted(set(requested)),
         "models": models,
     }
 
@@ -260,7 +357,7 @@ def tokenize_compare(text: str) -> Dict[str, Any]:
     if not text:
         raise ValueError("text 不能为空。")
     results = []
-    for model_type in MODEL_TYPES:
+    for model_type in TOKENIZER_MODEL_TYPES:
         try:
             if model_type == "rwkv":
                 results.append(_tokenize_with_rwkv(text))
@@ -282,7 +379,7 @@ def tokenize_compare(text: str) -> Dict[str, Any]:
 def sample_topk_logits(prompt: str, model_type: str) -> Dict[str, Any]:
     if not prompt.strip():
         raise ValueError("prompt 不能为空。")
-    if model_type not in MODEL_TYPES:
+    if model_type not in SAMPLE_MODEL_TYPES:
         raise ValueError(f"Unknown model type: {model_type}")
 
     adapter_cls, model_id = _model_spec(model_type)

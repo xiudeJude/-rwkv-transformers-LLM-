@@ -112,13 +112,21 @@ class RWKVAdapter(ModelAdapter):
     def create_state(self) -> RWKVAdapterState:
         return RWKVAdapterState()
 
-    def prefill(self, state: RWKVAdapterState, prompt: str, target_layer: int = 0, target_head: int = 0) -> Dict[str, Any]:
+    def prefill(
+        self,
+        state: RWKVAdapterState,
+        prompt: str,
+        target_layer: int = 0,
+        target_head: int = 0,
+        prompt_token_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
         """Runs the initial prefill stage on the complete prompt, initializing RWKV state."""
         if self.model is None or self.pipeline is None:
             raise RuntimeError("Model is not loaded in RWKVEngine.")
 
-        # 1. Encode prompt
-        prompt_token_ids = self.encode(prompt)
+        # 1. Encode prompt (or use caller-provided ids for exact-length lab measurements)
+        if prompt_token_ids is None:
+            prompt_token_ids = self.encode(prompt)
         if not prompt_token_ids:
             prompt_token_ids = [187]  # newline fallback if prompt is empty
 
@@ -278,6 +286,24 @@ class RWKVAdapter(ModelAdapter):
         # Frobenius norm for each of the 16 heads
         head_norms = torch.norm(wkv_state, p='fro', dim=(-2, -1))
         return [round(float(val), 6) for val in head_norms.tolist()]
+
+    def cache_metrics(self, state: RWKVAdapterState) -> Dict[str, Any]:
+        cache_bytes = estimate_state_bytes(state.current_state)
+        dtypes = set()
+        if state.current_state:
+            dtypes = {
+                str(tensor.dtype).replace("torch.", "")
+                for tensor in state.current_state
+                if isinstance(tensor, torch.Tensor)
+            }
+        return {
+            "cache_bytes": cache_bytes,
+            "kv_bytes": 0,
+            "linear_state_bytes": cache_bytes,
+            "dtype_label": " + ".join(sorted(dtypes)),
+            "full_attn_layers": [],
+            "linear_layers": list(range(self.num_layers)),
+        }
 
     def get_recurrent_state(self, state: RWKVAdapterState, step: Optional[int] = None, layer: int = 0, head: Optional[int] = None) -> Dict[str, Any]:
         """Level 2 On-demand pull: returns the state matrix for the specified step, layer, and optional head."""

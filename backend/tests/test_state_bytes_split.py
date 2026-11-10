@@ -56,6 +56,49 @@ def test_transformer_cache_and_visualization_bytes_are_separate():
         adapter.unload()
 
 
+def test_hybrid_kv_bytes_match_theory_and_linear_state_is_separate():
+    adapter = _load_or_skip(TransformerAdapter, settings.DEFAULT_TRANSFORMER)
+    try:
+        config = adapter.model.config
+        layer_types = getattr(config, "layer_types", None)
+        full_layers = (
+            [index for index, item in enumerate(layer_types) if item == "full_attention"]
+            if layer_types
+            else list(range(int(getattr(config, "num_hidden_layers", 0))))
+        )
+        assert adapter.full_attn_layers == full_layers
+
+        length = 64
+        state = adapter.create_state()
+        adapter.prefill(
+            state,
+            "hybrid split check",
+            target_layer=0,
+            prompt_token_ids=[1000 + (index % 1000) for index in range(length)],
+            capture_attention=False,
+        )
+        metrics = adapter.cache_metrics(state)
+        adapter.close_state(state)
+
+        num_heads = int(getattr(config, "num_attention_heads"))
+        kv_heads = int(getattr(config, "num_key_value_heads", num_heads))
+        head_dim = getattr(config, "head_dim", None)
+        if head_dim is None:
+            head_dim = int(getattr(config, "hidden_size")) // num_heads
+        element_bytes = int(metrics["kv_element_bytes"])
+        expected_kv = 2 * len(full_layers) * kv_heads * int(head_dim) * length * element_bytes
+
+        diff = int(metrics["kv_bytes"]) - expected_kv
+        assert diff == 0, (
+            f"hybrid kv_bytes={metrics['kv_bytes']} theoretical={expected_kv} "
+            f"diff={diff}; full_attn_layers={full_layers}"
+        )
+        assert metrics["linear_state_bytes"] > 0
+        assert metrics["cache_bytes"] == metrics["kv_bytes"] + metrics["linear_state_bytes"]
+    finally:
+        adapter.unload()
+
+
 def test_rwkv_cache_and_visualization_bytes_are_separate():
     adapter = _load_or_skip(RWKVAdapter, settings.DEFAULT_RWKV)
     try:

@@ -183,22 +183,36 @@ class MambaAdapter(ModelAdapter):
             "seq_len": seq_len,
         }
 
-    def prefill(self, state: MambaAdapterState, prompt: str, target_layer: int = 0, target_head: int = 0) -> Dict[str, Any]:
+    def prefill(
+        self,
+        state: MambaAdapterState,
+        prompt: str,
+        target_layer: int = 0,
+        target_head: int = 0,
+        prompt_token_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("Model is not loaded in MambaAdapter.")
 
-        tokenized = self.tokenize(prompt)
-        token_ids = tokenized["token_ids"]
+        if prompt_token_ids is None:
+            tokenized = self.tokenize(prompt)
+            token_ids = tokenized["token_ids"]
+            tokens = tokenized["tokens"]
+            input_ids = tokenized["input_ids"].to(self.device)
+            attention_mask = tokenized.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(self.device)
+        else:
+            token_ids = list(prompt_token_ids)
+            tokens = [self.decode_token(tid) for tid in token_ids]
+            input_ids = torch.tensor([token_ids], device=self.device, dtype=torch.long)
+            attention_mask = None
+
         if len(token_ids) > MAMBA_MAX_PROMPT_TOKENS:
             raise ValueError(
                 f"Mamba prompt 过长：{len(token_ids)} tokens，"
                 f"当前纯 PyTorch 参考路径上限为 {MAMBA_MAX_PROMPT_TOKENS} tokens。"
             )
-
-        input_ids = tokenized["input_ids"].to(self.device)
-        attention_mask = tokenized.get("attention_mask")
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device)
 
         with torch.no_grad():
             outputs = self.model(
@@ -207,7 +221,7 @@ class MambaAdapter(ModelAdapter):
                 use_cache=True,
             )
 
-        state.tokens = tokenized["tokens"]
+        state.tokens = tokens
         state.token_ids = token_ids
         state.cache = self._get_cache(outputs)
         state.last_logits = outputs.logits[:, -1, :].detach()
@@ -309,6 +323,29 @@ class MambaAdapter(ModelAdapter):
             "topk_candidates": candidates,
             "topk_logits": topk_logits,
             "is_finished": state.is_finished,
+        }
+
+    def cache_metrics(self, state: MambaAdapterState) -> Dict[str, Any]:
+        if state.cache is None:
+            return {
+                "cache_bytes": 0,
+                "kv_bytes": 0,
+                "linear_state_bytes": 0,
+                "dtype_label": "",
+                "full_attn_layers": [],
+                "linear_layers": list(range(self.num_layers)),
+            }
+        snapshot = self._snapshot(state.cache, len(state.token_ids))
+        components = snapshot["components"]
+        dtypes = sorted({component["dtype"] for component in components})
+        return {
+            "cache_bytes": int(snapshot["state_bytes"]),
+            "kv_bytes": 0,
+            "linear_state_bytes": int(snapshot["state_bytes"]),
+            "dtype_label": " + ".join(dtypes),
+            "full_attn_layers": [],
+            "linear_layers": list(range(self.num_layers)),
+            "components": components,
         }
 
     def export_state(

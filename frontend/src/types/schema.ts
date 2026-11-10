@@ -6,7 +6,7 @@ export interface TokenCandidate {
 
 export interface ModelMetadata {
   model_id: string;
-  model_type: 'transformer' | 'rwkv' | 'mamba';
+  model_type: 'transformer' | 'attention_baseline' | 'rwkv' | 'mamba';
   num_layers: number;
   num_heads: number;
   hidden_size: number;

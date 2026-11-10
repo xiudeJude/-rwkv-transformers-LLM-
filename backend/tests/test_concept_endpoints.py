@@ -40,18 +40,37 @@ def test_tokenize_endpoint_returns_three_tokenizers_without_model_weights():
             assert item["token_count"] == len(item["tokens"])
 
 
-def test_memory_growth_endpoint_returns_three_series():
+def test_memory_growth_endpoint_returns_four_prefill_series():
     client = TestClient(app)
     response = client.post(
         "/api/concept/memory-growth",
-        json={"prompt": "The capital of France is", "max_tokens": 1},
+        json={"prompt": "The capital of France is"},
     )
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["models"]) == 3
-    assert {item["model_type"] for item in payload["models"]} == {"transformer", "rwkv", "mamba"}
+    assert len(payload["models"]) == 4
+    assert {item["model_type"] for item in payload["models"]} == {
+        "transformer",
+        "attention_baseline",
+        "rwkv",
+        "mamba",
+    }
+    assert {64, 128, 256, 512, 1024, 2048}.issubset(set(payload["requested_lengths"]))
     if not any(item["available"] for item in payload["models"]):
         pytest.skip("No model weights available for the memory-growth endpoint")
+    for model in payload["models"]:
+        if not model["available"]:
+            continue
+        assert model["measurements"]
+        lengths = {item["length"] for item in model["measurements"]}
+        assert {64, 128, 256, 512}.issubset(lengths)
+        for item in model["measurements"]:
+            assert item["cache_bytes"] == item["kv_bytes"] + item["linear_state_bytes"]
+            assert item["dtype_label"]
+        if model["model_type"] in {"transformer", "attention_baseline"}:
+            assert {1024, 2048}.issubset(lengths)
+            assert model["theoretical"]["available"]
+            assert model["theoretical"]["matches"] is True
 
 
 def test_sample_logits_endpoint_uses_real_adapter_logits():
