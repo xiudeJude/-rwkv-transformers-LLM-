@@ -101,6 +101,52 @@ const formatBytes = (bytes: number): string => {
   return `${bytes} B`;
 };
 
+interface AxisTick {
+  value: number;
+  label: string;
+}
+
+const AXIS_UNITS = [
+  { divisor: 1024 * 1024, label: 'MiB' },
+  { divisor: 1024, label: 'KiB' },
+  { divisor: 1, label: 'B' },
+];
+
+const formatIntegerBytes = (bytes: number): string => {
+  const unit = AXIS_UNITS.find((item) => bytes >= item.divisor) ?? AXIS_UNITS[2];
+  return `${Math.round(bytes / unit.divisor)} ${unit.label}`;
+};
+
+const niceIntegerStep = (rough: number): number => {
+  const safe = Math.max(rough, 1);
+  const exponent = Math.floor(Math.log10(safe));
+  const base = 10 ** exponent;
+  const fraction = safe / base;
+  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return nice * base;
+};
+
+const buildLinearTicks = (maxValue: number): AxisTick[] => {
+  const unit = AXIS_UNITS.find((item) => maxValue >= item.divisor) ?? AXIS_UNITS[2];
+  const maxUnits = maxValue / unit.divisor;
+  const step = Math.max(1, Math.ceil(niceIntegerStep(maxUnits / 5)));
+  const ticks: AxisTick[] = [];
+  for (let value = 0; value <= maxUnits + 1e-9; value += step) {
+    ticks.push({
+      value: value * unit.divisor,
+      label: `${Math.round(value)} ${unit.label}`,
+    });
+  }
+  return ticks;
+};
+
+const buildLogTicks = (maxValue: number): AxisTick[] => {
+  const candidates = [1, 10, 100, 1024, 10240, 102400, 1048576, 10485760, 104857600];
+  return candidates
+    .filter((value) => value <= maxValue * 1.02)
+    .map((value) => ({ value, label: formatIntegerBytes(value) }));
+};
+
 const MODEL_COLORS: Record<string, string> = {
   transformer: '#818cf8',
   attention_baseline: '#f59e0b',
@@ -141,7 +187,7 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
 
   const width = 820;
   const height = 330;
-  const padLeft = 72;
+  const padLeft = 84;
   const padRight = 18;
   const padTop = 24;
   const padBottom = 44;
@@ -161,10 +207,7 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
   const line = (values: number[], lengths: number[]) =>
     values.map((value, index) => `${index === 0 ? 'M' : 'L'} ${x(lengths[index])} ${y(value)}`).join(' ');
 
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-    const value = logScale ? 10 ** (logMax * (1 - ratio)) : maxValue * (1 - ratio);
-    return value;
-  });
+  const yTicks = logScale ? buildLogTicks(maxValue) : buildLinearTicks(maxValue);
 
   const theoryModel = available.find(
     (model) => model.theoretical?.available && (model.theoretical.lengths?.length ?? 0) > 0
@@ -197,11 +240,11 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
   return (
     <div className="space-y-2">
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto rounded-lg bg-slate-950/80 border border-slate-800">
-        {yTicks.map((value, index) => (
-          <g key={index}>
-            <line x1={padLeft} x2={width - padRight} y1={y(value)} y2={y(value)} stroke="#1e293b" strokeWidth="1" />
-            <text x={padLeft - 8} y={y(value) + 3} textAnchor="end" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
-              {formatBytes(Math.round(value))}
+        {yTicks.map((tick) => (
+          <g key={tick.value}>
+            <line x1={padLeft} x2={width - padRight} y1={y(tick.value)} y2={y(tick.value)} stroke="#1e293b" strokeWidth="1" />
+            <text x={padLeft - 8} y={y(tick.value) + 3} textAnchor="end" fill="#64748b" fontSize="9" fontFamily="ui-monospace, monospace">
+              {tick.label}
             </text>
           </g>
         ))}
@@ -290,7 +333,14 @@ const MemoryChart: React.FC<{ models: GrowModel[]; logScale: boolean }> = ({ mod
           </text>
         ))}
         <text x={width / 2} y={height - 6} textAnchor="middle" fill="#64748b" fontSize="10">prefill length (tokens)</text>
-        <text x={12} y={padTop} fill="#64748b" fontSize="10" transform={`rotate(-90 12 ${padTop})`}>cache_bytes</text>
+        <text
+          transform={`translate(16 ${(height - padBottom + padTop) / 2}) rotate(-90)`}
+          textAnchor="middle"
+          fill="#64748b"
+          fontSize="10"
+        >
+          cache_bytes (B)
+        </text>
       </svg>
       <div className="flex items-center gap-4 flex-wrap text-[10px] text-slate-400 font-mono">
         {available.map((model) => (
